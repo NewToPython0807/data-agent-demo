@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.git/
+.env
+data/
+check_*.py
+docs/
+PRD.md
+DEVELOPMENT_PLAN.md
+Dockerfile
+docker-compose.yml

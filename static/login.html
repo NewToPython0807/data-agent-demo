@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>登录 - 智能问数 Data Agent</title>
+    <style>
+      body { font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif; max-width: 360px; margin: 80px auto; padding: 0 16px; }
+      h1 { text-align: center; }
+      label { display: block; margin: 12px 0 4px; }
+      input { width: 100%; padding: 8px; box-sizing: border-box; }
+      button { width: 100%; margin-top: 16px; padding: 10px; cursor: pointer; }
+      #error { color: #d33; min-height: 20px; }
+    </style>
+  </head>
+  <body>
+    <h1>智能问数 Data Agent</h1>
+    <form id="login-form">
+      <label>账号</label>
+      <input name="username" autocomplete="username" required />
+      <label>密码</label>
+      <input name="password" type="password" autocomplete="current-password" required />
+      <button type="submit">登录</button>
+    </form>
+    <p id="error"></p>
+    <script>
+      const form = document.getElementById("login-form");
+      const err = document.getElementById("error");
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        err.textContent = "";
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: form.username.value, password: form.password.value }),
+        });
+        if (res.ok) {
+          window.location.href = "/";
+        } else {
+          let detail = "登录失败";
+          try { detail = (await res.json()).detail || detail; } catch (_) {}
+          err.textContent = detail;
+        }
+      });
+    </script>
+  </body>
+</html>

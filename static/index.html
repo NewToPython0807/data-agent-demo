@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>智能问数 Data Agent</title>
+    <style>
+      body { font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
+      header { display: flex; justify-content: space-between; align-items: center; }
+      h1 { font-size: 20px; margin: 0; }
+      #question { width: 100%; min-height: 64px; padding: 8px; box-sizing: border-box; font-size: 14px; }
+      .row { margin-top: 10px; }
+      button { padding: 8px 16px; cursor: pointer; }
+      #sql-editor { width: 100%; min-height: 96px; box-sizing: border-box; font-family: ui-monospace, Consolas, monospace; font-size: 13px; padding: 8px; }
+      .error { color: #d33; min-height: 18px; }
+      #result-table { max-height: 420px; overflow: auto; border: 1px solid #eee; }
+      table { border-collapse: collapse; }
+      th, td { border: 1px solid #ccc; padding: 4px 8px; font-size: 13px; white-space: nowrap; }
+      th { background: #f0f0f0; position: sticky; top: 0; }
+      .empty { color: #888; padding: 8px; }
+      .history-item { border-bottom: 1px solid #eee; padding: 6px 0; }
+      .history-title { cursor: pointer; color: #06c; }
+      .conv-item { border-bottom: 1px solid #f0f0f0; padding: 6px 0; }
+      .conv-item pre { margin: 4px 0 0 0; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>智能问数 Data Agent</h1>
+      <div>
+        <span id="username"></span>
+        <button id="logout">退出登录</button>
+      </div>
+    </header>
+
+    <div class="row" id="conversation-area" style="display: none">
+      <h3>对话上下文（最近 5 轮）</h3>
+      <div id="conversation"></div>
+    </div>
+
+    <div class="row">
+      <textarea id="question" placeholder="用中文描述你想查什么，例如：华东地区销售额合计是多少？"></textarea>
+    </div>
+    <div class="row">
+      <button id="ask">生成 SQL</button>
+      <button id="schema-btn">查看表结构</button>
+      <button id="history-btn">查询历史</button>
+    </div>
+    <div class="row"><div id="error" class="error"></div></div>
+
+    <div class="row">
+      <h3>上传数据（CSV / Excel，更新原始数据）</h3>
+      <input type="file" id="upload-file" accept=".csv,.xlsx" />
+      <select id="upload-mode">
+        <option value="replace">整表覆盖（默认）</option>
+        <option value="append">追加</option>
+      </select>
+      <button id="upload-btn">上传</button>
+      <span id="upload-msg"></span>
+    </div>
+
+    <div class="row" id="schema-area" style="display: none">
+      <h3>数据库表结构</h3>
+      <div id="schema-list"></div>
+    </div>
+
+    <div class="row" id="history-area" style="display: none">
+      <h3>查询历史</h3>
+      <button id="history-clear">清空历史</button>
+      <div id="history-list"></div>
+    </div>
+
+    <div class="row" id="sql-area" style="display: none">
+      <h3>生成的 SQL（可修改，确认后才执行）</h3>
+      <textarea id="sql-editor" rows="6"></textarea>
+      <div class="row">
+        <button id="execute">确认执行</button>
+        <button id="cancel">取消</button>
+      </div>
+    </div>
+
+    <div class="row" id="result-area" style="display: none">
+      <h3>查询结果</h3>
+      <div id="result-meta"></div>
+      <div id="result-table"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

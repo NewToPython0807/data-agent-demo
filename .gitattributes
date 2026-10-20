@@ -1,0 +1,16 @@
+# 统一换行符：代码/配置强制 LF，避免 Windows 检出后把 Dockerfile 等变成 CRLF
+* text=auto
+
+*.py text eol=lf
+*.js text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+.env.example text eol=lf
+.gitignore text eol=lf
+.dockerignore text eol=lf
