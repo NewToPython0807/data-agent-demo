@@ -1,14 +1,18 @@
-# 轻量「智能问数」Data Agent
+# 轻量「智能问数」Data Agent（第二版）
 
-一个部署在云端的轻量数据问答助手：用**中文自然语言**提问，系统先生成 SQL，**经你审核确认后才执行**，返回查询结果。原始数据可通过网页上传 CSV/Excel 随时更新。
+一个部署在云端的轻量数据问答助手：用**中文自然语言**提问，系统先生成 SQL，**经你审核确认后才执行**，返回查询结果。支持**指标/语义层**、**复杂查询（多表关联 / 聚合后筛选 / 窗口函数）**、**三段式界面**与**结果导出 CSV**。
 
 ## 功能
 
 - ✅ 自然语言问数（DeepSeek 生成 SQL）
 - ✅ SQL 人工审核：先展示、可手动修改、确认后才执行
 - ✅ 只读保护：仅允许 SELECT，写操作直接拦截
+- ✅ **指标 / 语义层**：表与字段中文名、指标口径（含单位、适用维度），保留变更历史
+- ✅ **复杂查询**：多表 JOIN、HAVING、窗口函数（10 万行以内）
+- ✅ **三段式界面**：左导航（数据表 / 指标 / 历史 / 设置）/ 中对话流 / 右结果区
+- ✅ **结果导出 CSV**（UTF-8 BOM，Excel 直接打开）
 - ✅ 网页上传 CSV / Excel（整表覆盖 / 追加）
-- ✅ 表结构展示、查询历史、多轮追问
+- ✅ 查询历史、多轮追问
 - ✅ 单账号登录（签名 Cookie 会话，7 天）
 - ✅ Docker 一键部署，数据持久化
 
@@ -26,13 +30,16 @@
 
 ```
 app/                后端（FastAPI 路由与业务模块）
-static/             前端页面（index.html / login.html / app.js）
+static/             前端（index.html / login.html / app.js / app.css）
+docs/               第二版文档（PRD-v2 / 开发计划 / 验收清单 / 技术决策记录）
 data/               运行时生成：agent.db、日志（已 gitignore）
 deploy.md           云端部署操作记录
 Dockerfile          镜像定义
 docker-compose.yml  编排（数据卷 + .env 挂载）
 .env.example        配置模板
 requirements.txt    Python 依赖
+seed_data_v2.py     测试造数脚本（可重复运行）
+test_*.py           功能/回归测试脚本
 ```
 
 ---
@@ -53,7 +60,7 @@ python -m venv .venv
 .venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-浏览器打开 `http://127.0.0.1:8000/`。
+浏览器打开 `http://127.0.0.1:8000/`。首次启动会自动创建语义层四张表（幂等），不影响已有数据。
 
 ## 云端部署
 
@@ -80,17 +87,44 @@ python -m venv .venv
 
 ---
 
-## 使用指南
+## 使用指南（三段式界面）
 
 1. **登录**：打开网页，输入 `.env` 中配置的账号密码。
-2. **问数**：输入中文问题 → 点"生成 SQL" → 页面展示 SQL（可编辑）→ 点"确认执行" → 查看结果表格。
-3. **追问**：直接继续提问（如"再按地区分组"），系统会结合最近 5 轮上下文理解。
-4. **上传数据**：选择 CSV/Excel → 选"整表覆盖 / 追加" → 点"上传"；表名取文件名。
-5. **查看表结构 / 历史**：点页面顶部对应按钮。
+2. **数据表**（左侧「数据表」）：上传 CSV/Excel（覆盖 / 追加，追加需选目标表）；编辑表与字段中文名。
+3. **指标**（左侧「指标」）：新增/编辑/删除指标（名称、口径、说明、关联表字段、单位、适用维度）；查看变更历史。
+4. **问数**（点左上角「智能问数」）：输入中文问题 → 中间对话流出现 SQL → 可编辑 → 点「确认执行」→ 右侧显示结果；可继续追问。
+5. **历史**（左侧「历史」）：查看历史记录与详情，支持刷新/清空。
+6. **设置**（左侧「设置」）：查看当前账号、退出登录。
+7. **导出**：执行查询后点结果区「导出 CSV」。
+
+## 测试造数
+
+```powershell
+.venv\Scripts\python seed_data_v2.py
+```
+
+生成 4 张关联表：`regions`(5) / `customers`(1万) / `products`(500) / `orders`(10万)，含中文、空值、边界值与关联键；可重复运行（整表替换）。
+
+## 测试脚本
+
+| 脚本 | 覆盖 |
+| --- | --- |
+| `test_semantic_v2.py` | 表/字段中文名、指标 CRUD、变更历史 |
+| `test_prompt_v2.py` | 提示词注入语义层 |
+| `test_complex_v2.py` | 复杂查询提示策略 |
+| `test_metric_question_v2.py` | 指标问数快路径 |
+| `test_complex_query_v2.py` | JOIN / HAVING / 窗口函数执行 |
+| `test_export_v2.py` / `test_t27_export.py` | CSV 导出 |
+| `test_t25_complex.py` | 10 万行复杂查询 |
+| `test_t26_ui.py` / `test_ui_bindings_v2.py` | 前端完整性静态检查 |
+| `test_t28_regression.py` | V1 功能回归 |
 
 ## 常见问题
 
 - **Docker 构建拉不动 `python:3.11-slim`**：给 Docker 配国内镜像加速（见 deploy.md 第 2 步）。
-- **Compose 报 `$` 变量警告**：`.env` 里 bcrypt 哈希含 `$`，本项目已用"挂载 .env 文件"方式规避，警告可忽略。
+- **Compose 报 `$` 变量警告**：`.env` 里 bcrypt 哈希含 `$`；本项目已用"挂载 .env 文件"方式规避，警告可忽略。
 - **外网打不开 8000**：腾讯云控制台防火墙放行 TCP 8000。
 - **登录提示未配置账号**：`.env` 没被读到，确认 `ACCOUNT_USERNAME` 与 `ACCOUNT_PASSWORD_HASH` 已填写并重启。
+- **上传 CSV 编码报错**：已自动尝试 UTF-8 / GBK / GB18030 / Big5 / UTF-16；仍失败请将文件另存为 UTF-8（或改用 .xlsx）。
+- **追加失败**：需在「目标表」中选择已有表，且文件列需与目标表一致。
+- **复杂查询报 `unable to open database file`**：已用 `PRAGMA temp_store = MEMORY` 规避（复杂查询走内存临时表）。
