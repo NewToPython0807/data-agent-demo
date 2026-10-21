@@ -20,8 +20,13 @@ class UploadError(Exception):
 ALLOWED_EXT = {".csv", ".xlsx"}
 
 
-def save_and_import(filename: str, content: bytes, mode: str = "replace") -> dict:
-    """校验并导入上传内容，返回导入结果。"""
+def save_and_import(
+    filename: str, content: bytes, mode: str = "replace", table: str | None = None
+) -> dict:
+    """校验并导入上传内容，返回导入结果。
+
+    table 指定目标表名（追加到已有表时必须指定）；为空时按文件名生成。
+    """
     if not filename:
         raise UploadError("缺少文件名")
     ext = Path(filename).suffix.lower()
@@ -42,9 +47,10 @@ def save_and_import(filename: str, content: bytes, mode: str = "replace") -> dic
     try:
         with os.fdopen(fd, "wb") as out:
             out.write(content)
+        target = table or filename
         if ext == ".csv":
-            return import_csv(tmp_path, filename, mode)
-        return import_excel(tmp_path, filename, mode)
+            return import_csv(tmp_path, target, mode)
+        return import_excel(tmp_path, target, mode)
     except DataImportError as exc:
         raise UploadError(str(exc)) from exc
     finally:

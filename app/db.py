@@ -27,6 +27,9 @@ def _connect() -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
+    # 复杂查询（JOIN/排序/聚合）可能需要临时文件；改为内存临时表，
+    # 避免系统临时目录不可写时出现 "unable to open database file"。
+    conn.execute("PRAGMA temp_store = MEMORY")
     return conn
 
 

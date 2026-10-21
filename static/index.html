@@ -4,87 +4,136 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>智能问数 Data Agent</title>
-    <style>
-      body { font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
-      header { display: flex; justify-content: space-between; align-items: center; }
-      h1 { font-size: 20px; margin: 0; }
-      #question { width: 100%; min-height: 64px; padding: 8px; box-sizing: border-box; font-size: 14px; }
-      .row { margin-top: 10px; }
-      button { padding: 8px 16px; cursor: pointer; }
-      #sql-editor { width: 100%; min-height: 96px; box-sizing: border-box; font-family: ui-monospace, Consolas, monospace; font-size: 13px; padding: 8px; }
-      .error { color: #d33; min-height: 18px; }
-      #result-table { max-height: 420px; overflow: auto; border: 1px solid #eee; }
-      table { border-collapse: collapse; }
-      th, td { border: 1px solid #ccc; padding: 4px 8px; font-size: 13px; white-space: nowrap; }
-      th { background: #f0f0f0; position: sticky; top: 0; }
-      .empty { color: #888; padding: 8px; }
-      .history-item { border-bottom: 1px solid #eee; padding: 6px 0; }
-      .history-title { cursor: pointer; color: #06c; }
-      .conv-item { border-bottom: 1px solid #f0f0f0; padding: 6px 0; }
-      .conv-item pre { margin: 4px 0 0 0; }
-    </style>
+    <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
-    <header>
-      <h1>智能问数 Data Agent</h1>
-      <div>
-        <span id="username"></span>
-        <button id="logout">退出登录</button>
-      </div>
-    </header>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand" id="brand">智能问数</div>
+        <nav class="nav">
+          <button class="nav-item" data-view="tables">数据表</button>
+          <button class="nav-item" data-view="metrics">指标</button>
+          <button class="nav-item" data-view="history">历史</button>
+          <button class="nav-item" data-view="settings">设置</button>
+        </nav>
+        <button id="logout" class="logout">退出登录</button>
+      </aside>
 
-    <div class="row" id="conversation-area" style="display: none">
-      <h3>对话上下文（最近 5 轮）</h3>
-      <div id="conversation"></div>
-    </div>
+      <main class="conversation" id="view-ask">
+        <div class="conversation-header">对话问数（点击左上角「智能问数」返回）</div>
+        <div class="scroll" id="conversation-scroll">
+          <div id="conversation-items"></div>
+          <div id="sql-area" class="sql-area" hidden>
+            <div class="label">生成的 SQL（可修改，确认后才执行）</div>
+            <textarea id="sql-editor"></textarea>
+            <div class="actions">
+              <button id="execute">确认执行</button>
+              <button id="cancel">取消</button>
+            </div>
+          </div>
+          <div id="error" class="error"></div>
+        </div>
+        <div class="composer">
+          <textarea id="question" placeholder="用中文描述你想查什么，例如：华东地区销售额合计是多少？"></textarea>
+          <button id="ask">发送</button>
+        </div>
+      </main>
 
-    <div class="row">
-      <textarea id="question" placeholder="用中文描述你想查什么，例如：华东地区销售额合计是多少？"></textarea>
-    </div>
-    <div class="row">
-      <button id="ask">生成 SQL</button>
-      <button id="schema-btn">查看表结构</button>
-      <button id="history-btn">查询历史</button>
-    </div>
-    <div class="row"><div id="error" class="error"></div></div>
+      <section class="result" id="result-pane">
+        <div class="result-header">查询结果</div>
+        <div id="result-placeholder" class="result-placeholder">执行查询后，结果会显示在这里</div>
+        <div id="result-meta" class="result-meta"></div>
+        <div id="result-table" class="result-table"></div>
+        <div class="result-actions">
+          <button id="export-btn" disabled>导出 CSV</button>
+        </div>
+      </section>
 
-    <div class="row">
-      <h3>上传数据（CSV / Excel，更新原始数据）</h3>
-      <input type="file" id="upload-file" accept=".csv,.xlsx" />
-      <select id="upload-mode">
-        <option value="replace">整表覆盖（默认）</option>
-        <option value="append">追加</option>
-      </select>
-      <button id="upload-btn">上传</button>
-      <span id="upload-msg"></span>
-    </div>
+      <section class="view" id="view-tables" hidden>
+        <h2>数据表</h2>
+        <div class="panel">
+          <h3>上传数据（CSV / Excel）</h3>
+          <div class="row">
+            <input type="file" id="upload-file" accept=".csv,.xlsx" />
+            <select id="upload-mode">
+              <option value="replace">整表覆盖（默认）</option>
+              <option value="append">追加</option>
+            </select>
+            <select id="upload-table">
+              <option value="">（按文件名）</option>
+            </select>
+            <button id="upload-btn">上传</button>
+          </div>
+          <div id="tables-msg" class="msg"></div>
+        </div>
 
-    <div class="row" id="schema-area" style="display: none">
-      <h3>数据库表结构</h3>
-      <div id="schema-list"></div>
-    </div>
+        <div class="panel">
+          <h3>表列表与中文名</h3>
+          <div id="table-list"></div>
+        </div>
 
-    <div class="row" id="history-area" style="display: none">
-      <h3>查询历史</h3>
-      <button id="history-clear">清空历史</button>
-      <div id="history-list"></div>
-    </div>
+        <div class="panel" id="table-detail" hidden>
+          <h3 id="table-detail-title">字段中文名</h3>
+          <div id="column-list"></div>
+        </div>
+      </section>
 
-    <div class="row" id="sql-area" style="display: none">
-      <h3>生成的 SQL（可修改，确认后才执行）</h3>
-      <textarea id="sql-editor" rows="6"></textarea>
-      <div class="row">
-        <button id="execute">确认执行</button>
-        <button id="cancel">取消</button>
-      </div>
-    </div>
+      <section class="view" id="view-metrics" hidden>
+        <h2>指标管理</h2>
 
-    <div class="row" id="result-area" style="display: none">
-      <h3>查询结果</h3>
-      <div id="result-meta"></div>
-      <div id="result-table"></div>
-    </div>
+        <div class="panel">
+          <h3 id="metric-form-title">新增指标</h3>
+          <div class="form-grid">
+            <input id="m-name" placeholder="指标名称（必填）" />
+            <input id="m-formula" placeholder="计算口径，如 SUM(销售额)（必填）" />
+            <input id="m-table" placeholder="关联表（如 test_sales）" />
+            <input id="m-column" placeholder="关联字段（如 销售额）" />
+            <input id="m-unit" placeholder="单位（如 元）" />
+            <input id="m-dimensions" placeholder="适用维度（如 地区/时间）" />
+            <input id="m-description" class="wide" placeholder="说明" />
+          </div>
+          <div class="actions">
+            <button id="m-save">保存</button>
+            <button id="m-reset">清空</button>
+          </div>
+          <div id="metrics-msg" class="msg"></div>
+        </div>
 
+        <div class="panel">
+          <h3>指标列表</h3>
+          <div id="metric-list"></div>
+        </div>
+
+        <div class="panel" id="metric-history" hidden>
+          <h3 id="metric-history-title">变更历史</h3>
+          <div id="metric-history-list"></div>
+        </div>
+      </section>
+      <section class="view" id="view-history" hidden>
+        <h2>查询历史</h2>
+        <div class="panel">
+          <div class="row">
+            <button id="history-refresh">刷新</button>
+            <button id="history-clear">清空历史</button>
+          </div>
+          <div id="history-msg" class="msg"></div>
+          <div id="history-list"></div>
+        </div>
+      </section>
+      <section class="view" id="view-settings" hidden>
+        <h2>设置</h2>
+        <div class="panel">
+          <h3>账号</h3>
+          <div class="row">
+            <span>当前账号：</span>
+            <strong id="settings-username"></strong>
+          </div>
+          <div class="actions">
+            <button id="settings-logout">退出登录</button>
+          </div>
+        </div>
+      </section>
+    </div>
     <script src="/static/app.js"></script>
   </body>
 </html>

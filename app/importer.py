@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from app.consistency import check_consistency
-from app.db import connect, execute_query
+from app.db import DatabaseError, connect, execute_query
 
 
 class DataImportError(Exception):
@@ -61,12 +61,72 @@ def _first_row(df: pd.DataFrame) -> list:
     return [None if pd.isna(v) else v for v in df.iloc[0].astype(object).tolist()]
 
 
+def _looks_utf16(head: bytes) -> str | None:
+    """通过 0 字节分布判断是否为无 BOM 的 UTF-16，返回编码名或 None。"""
+    if len(head) < 8:
+        return None
+    even = head[0::2]
+    odd = head[1::2]
+    n = min(len(even), len(odd))
+    if n == 0:
+        return None
+    even_nulls = sum(1 for b in even if b == 0)
+    odd_nulls = sum(1 for b in odd if b == 0)
+    if odd_nulls / n > 0.3 and even_nulls / n < 0.05:
+        return "utf-16-le"
+    if even_nulls / n > 0.3 and odd_nulls / n < 0.05:
+        return "utf-16-be"
+    return None
+
+
 def _read_csv(path: Path) -> pd.DataFrame:
-    """读取 CSV：优先 UTF-8(BOM)，失败回退 GBK（常见中文编码）。"""
+    """读取 CSV：自动识别常见编码、伪 CSV（其实是 xlsx）与制表符分隔。"""
+
+    def _read(enc: str) -> pd.DataFrame:
+        df = pd.read_csv(path, encoding=enc)
+        # 逗号只切出 1 列时，尝试制表符分隔（Excel「Unicode 文本」常见）
+        if df.shape[1] == 1:
+            df_tab = pd.read_csv(path, encoding=enc, sep="\t")
+            if df_tab.shape[1] > 1:
+                return df_tab
+        return df
+
+    with open(path, "rb") as f:
+        head = f.read(64 * 1024)
+
+    # 1) 其实是 Excel（ZIP 头 PK）
+    if head[:2] == b"PK":
+        return pd.read_excel(path, engine="openpyxl")
+    # 2) BOM
+    if head[:3] == b"\xef\xbb\xbf":
+        return _read("utf-8-sig")
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return _read("utf-16")
+
+    # 3) 常见编码依次尝试
+    last_err: Exception | None = None
+    for enc in ("utf-8", "gbk", "gb18030", "big5"):
+        try:
+            return _read(enc)
+        except UnicodeError as exc:
+            last_err = exc
+            continue
+
+    # 4) 疑似无 BOM 的 UTF-16
+    enc16 = _looks_utf16(head)
+    if enc16:
+        try:
+            return _read(enc16)
+        except UnicodeError as exc:
+            last_err = exc
+
+    # 5) 兜底：容错替换（不抛错，个别非法字节会被替换为 �）
     try:
-        return pd.read_csv(path, encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        return pd.read_csv(path, encoding="gbk")
+        return pd.read_csv(path, encoding="gb18030", encoding_errors="replace")
+    except Exception:
+        raise ValueError(
+            f"无法识别文件编码（{last_err}），请将文件另存为 UTF-8 后重试，或改用 .xlsx"
+        )
 
 
 def import_dataframe(df: pd.DataFrame, table_name: str, mode: str = "replace") -> dict:
@@ -80,8 +140,21 @@ def import_dataframe(df: pd.DataFrame, table_name: str, mode: str = "replace") -
 
     previous_count = 0
     if mode == "append":
-        existing = execute_query(f'SELECT COUNT(*) AS c FROM "{table}"')
-        previous_count = int(existing["rows"][0][0]) if existing["rows"] else 0
+        try:
+            existing = execute_query(f'SELECT COUNT(*) AS c FROM "{table}"')
+            previous_count = int(existing["rows"][0][0]) if existing["rows"] else 0
+        except DatabaseError:
+            raise DataImportError(
+                f"追加模式要求目标表「{table}」已存在，请先上传数据或改用「整表覆盖」"
+            ) from None
+
+        existing_cols = execute_query(f'PRAGMA table_info("{table}")')["rows"]
+        existing_names = {r[1] for r in existing_cols}
+        if existing_names and existing_names != set(df.columns):
+            raise DataImportError(
+                f"追加失败：文件列与目标表「{table}」不一致"
+                f"（目标表：{sorted(existing_names)}，文件：{sorted(df.columns)}）"
+            )
 
     try:
         with closing(connect()) as conn:

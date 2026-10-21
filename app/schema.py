@@ -52,7 +52,7 @@ def get_schema() -> list[dict]:
 
 
 # 内部系统表：不面向"问数"与前端展示（默认排除）
-INTERNAL_TABLES = {"history"}
+INTERNAL_TABLES = {"history", "table_meta", "column_meta", "metrics", "metric_history"}
 
 
 def list_user_tables() -> list[str]:
