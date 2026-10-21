@@ -39,7 +39,6 @@ docker-compose.yml  编排（数据卷 + .env 挂载）
 .env.example        配置模板
 requirements.txt    Python 依赖
 seed_data_v2.py     测试造数脚本（可重复运行）
-test_*.py           功能/回归测试脚本
 ```
 
 ---
@@ -104,20 +103,6 @@ python -m venv .venv
 ```
 
 生成 4 张关联表：`regions`(5) / `customers`(1万) / `products`(500) / `orders`(10万)，含中文、空值、边界值与关联键；可重复运行（整表替换）。
-
-## 测试脚本
-
-| 脚本 | 覆盖 |
-| --- | --- |
-| `test_semantic_v2.py` | 表/字段中文名、指标 CRUD、变更历史 |
-| `test_prompt_v2.py` | 提示词注入语义层 |
-| `test_complex_v2.py` | 复杂查询提示策略 |
-| `test_metric_question_v2.py` | 指标问数快路径 |
-| `test_complex_query_v2.py` | JOIN / HAVING / 窗口函数执行 |
-| `test_export_v2.py` / `test_t27_export.py` | CSV 导出 |
-| `test_t25_complex.py` | 10 万行复杂查询 |
-| `test_t26_ui.py` / `test_ui_bindings_v2.py` | 前端完整性静态检查 |
-| `test_t28_regression.py` | V1 功能回归 |
 
 ## 常见问题
 
