@@ -1,0 +1,17 @@
+[
+  {
+    "question": "计算 1+1",
+    "sql": "SELECT 1 + 1 AS x",
+    "expected": 2
+  },
+  {
+    "question": "计算 2*3",
+    "sql": "SELECT 2 * 3 AS x",
+    "expected": 6
+  },
+  {
+    "question": "test_sales 行数",
+    "sql": "SELECT COUNT(*) AS c FROM test_sales",
+    "expected": null
+  }
+]

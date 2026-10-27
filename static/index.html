@@ -33,6 +33,16 @@
           </div>
           <div id="error" class="error"></div>
         </div>
+        <div class="raw-sql-panel">
+          <details>
+            <summary>直接执行 SQL（高级）</summary>
+            <textarea id="raw-sql" placeholder="输入只读 SQL，例如：SELECT * FROM test_sales LIMIT 10"></textarea>
+            <div class="actions">
+              <button id="raw-execute">执行 SQL</button>
+            </div>
+            <div id="raw-msg" class="msg"></div>
+          </details>
+        </div>
         <div class="composer">
           <textarea id="question" placeholder="用中文描述你想查什么，例如：华东地区销售额合计是多少？"></textarea>
           <button id="ask">发送</button>
@@ -45,6 +55,8 @@
         <div id="result-meta" class="result-meta"></div>
         <div id="result-table" class="result-table"></div>
         <div class="result-actions">
+          <button id="feedback-up" disabled>👍 有用</button>
+          <button id="feedback-down" disabled>👎 没用</button>
           <button id="export-btn" disabled>导出 CSV</button>
         </div>
       </section>
@@ -75,6 +87,22 @@
         <div class="panel" id="table-detail" hidden>
           <h3 id="table-detail-title">字段中文名</h3>
           <div id="column-list"></div>
+        </div>
+
+        <div class="panel" id="relations-panel">
+          <h3>表关系（JOIN 键）</h3>
+          <div class="form-grid">
+            <input id="rel-left-table" placeholder="左表（如 orders）" />
+            <input id="rel-left-column" placeholder="左字段（如 customer_id）" />
+            <input id="rel-right-table" placeholder="右表（如 customers）" />
+            <input id="rel-right-column" placeholder="右字段（如 id）" />
+            <input id="rel-description" class="wide" placeholder="说明（可选，如 订单-客户）" />
+          </div>
+          <div class="actions">
+            <button id="rel-add">添加关系</button>
+          </div>
+          <div id="relations-msg" class="msg"></div>
+          <div id="relation-list"></div>
         </div>
       </section>
 
@@ -111,6 +139,7 @@
       </section>
       <section class="view" id="view-history" hidden>
         <h2>查询历史</h2>
+        <div class="panel stats-card" id="stats-card"></div>
         <div class="panel">
           <div class="row">
             <button id="history-refresh">刷新</button>
@@ -131,6 +160,20 @@
           <div class="actions">
             <button id="settings-logout">退出登录</button>
           </div>
+        </div>
+
+        <div class="panel">
+          <h3>示例库（问题 → 正确 SQL）</h3>
+          <div class="form-grid">
+            <input id="golden-question" class="wide" placeholder="问题（如：华东地区销售额合计是多少）" />
+            <input id="golden-sql" class="wide" placeholder="正确 SQL" />
+            <input id="golden-tags" class="wide" placeholder="标签（逗号分隔，可选）" />
+          </div>
+          <div class="actions">
+            <button id="golden-add">添加示例</button>
+          </div>
+          <div id="golden-msg" class="msg"></div>
+          <div id="golden-list"></div>
         </div>
       </section>
     </div>

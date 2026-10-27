@@ -1,6 +1,8 @@
 /* 前端逻辑（T13 三段式骨架 / T14 数据表页）。 */
 
 let currentQuestion = "";
+let currentPlan = null;
+let lastHistoryId = null;
 let conversation = [];
 let currentUser = "";
 let lastResult = null;
@@ -17,7 +19,15 @@ async function checkLogin() {
 }
 
 function showError(msg) {
-  document.getElementById("error").textContent = msg || "";
+  let text = msg || "";
+  if (typeof text !== "string") {
+    try {
+      text = JSON.stringify(text);
+    } catch (_) {
+      text = String(text);
+    }
+  }
+  document.getElementById("error").textContent = text;
 }
 
 function makeTable(columns, rows) {
@@ -64,7 +74,86 @@ function renderResult(data) {
     p.textContent = "没有符合条件的数据";
     box.appendChild(p);
   }
+  if (data.warnings && data.warnings.length) {
+    const warn = document.createElement("div");
+    warn.className = "result-warnings";
+    warn.textContent = "提示：" + data.warnings.join("；");
+    box.appendChild(warn);
+  }
+  lastHistoryId = data.history_id || null;
+  const up = document.getElementById("feedback-up");
+  const down = document.getElementById("feedback-down");
+  if (up) up.disabled = !lastHistoryId;
+  if (down) down.disabled = !lastHistoryId;
   document.getElementById("export-btn").disabled = false;
+}
+
+async function sendFeedback(rating) {
+  const up = document.getElementById("feedback-up");
+  const down = document.getElementById("feedback-down");
+  const res = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      history_id: lastHistoryId,
+      question: currentQuestion || "手动 SQL",
+      sql: lastExecutedSql,
+      rating,
+    }),
+  });
+  if (res.ok) {
+    if (up) up.disabled = true;
+    if (down) down.disabled = true;
+    showError(rating > 0 ? "已记录反馈：👍" : "已记录反馈：👎");
+  } else {
+    showError("反馈失败");
+  }
+}
+
+function makePlanCard(plan) {
+  if (!plan) return null;
+  const details = document.createElement("details");
+  details.className = "plan-card";
+  const summary = document.createElement("summary");
+  summary.textContent = "分析过程";
+  details.appendChild(summary);
+
+  const lines = [];
+  const metrics = plan.metrics || [];
+  if (metrics.length) {
+    lines.push(
+      "指标：" +
+        metrics
+          .map((m) =>
+            typeof m === "string" ? m : `${m.name || ""}${m.formula ? "=" + m.formula : ""}`
+          )
+          .join("；")
+    );
+  }
+  if ((plan.tables || []).length) lines.push("表：" + plan.tables.join("、"));
+  if ((plan.joins || []).length) lines.push("关联：" + plan.joins.join("；"));
+  if ((plan.filters || []).length) {
+    lines.push(
+      "过滤：" +
+        plan.filters
+          .map((f) =>
+            typeof f === "string" ? f : `${f.column || ""} ${f.op || ""} ${f.value ?? ""}`.trim()
+          )
+          .join("；")
+    );
+  }
+  if ((plan.group_by || []).length) lines.push("分组：" + plan.group_by.join("、"));
+  if ((plan.order_by || []).length) lines.push("排序：" + plan.order_by.join("、"));
+  if (plan.limit !== null && plan.limit !== undefined) lines.push("限制：" + plan.limit);
+  if ((plan.assumptions || []).length) lines.push("假设：" + plan.assumptions.join("；"));
+  if ((plan.ambiguities || []).length) lines.push("歧义：" + plan.ambiguities.join("；"));
+  if ((plan.missing || []).length) lines.push("缺失：" + plan.missing.join("、"));
+
+  const body = document.createElement("pre");
+  body.className = "plan-text";
+  body.textContent = lines.length ? lines.join("\n") : "（无）";
+  details.appendChild(body);
+  return details;
 }
 
 function renderConversation() {
@@ -81,12 +170,39 @@ function renderConversation() {
     const a = document.createElement("div");
     a.className = "bubble assistant";
     const pre = document.createElement("pre");
-    pre.textContent = t.sql || "";
     const badge = document.createElement("span");
     badge.className = "status " + (t.status || "pending");
-    badge.textContent =
-      t.status === "executed" ? "已执行" : t.status === "cancelled" ? "已取消" : "待执行";
-    a.append(pre, badge);
+
+    const planCard = makePlanCard(t.plan);
+    if (planCard) a.appendChild(planCard);
+    if (t.examples && t.examples.length) {
+      const ex = document.createElement("div");
+      ex.className = "plan-examples";
+      ex.textContent = "参考示例：" + t.examples.map((e) => e.question).join("；");
+      a.appendChild(ex);
+    }
+
+    if (t.status === "refused") {
+      pre.textContent = t.reason || "（无法回答：该问题超出当前数据范围）";
+      badge.textContent = "无法回答";
+      a.append(pre, badge);
+    } else if (t.status === "clarify") {
+      pre.textContent = "需要澄清：" + (t.reason || "");
+      badge.textContent = "需要澄清";
+      const cont = document.createElement("button");
+      cont.textContent = "按假设继续";
+      cont.addEventListener("click", () => askQuestion(true, t.question));
+      a.append(pre, badge, cont);
+    } else if (t.status === "corrected") {
+      pre.textContent = t.sql || "";
+      badge.textContent = "已自动纠正";
+      a.append(pre, badge);
+    } else {
+      pre.textContent = t.sql || "";
+      badge.textContent =
+        t.status === "executed" ? "已执行" : t.status === "cancelled" ? "已取消" : "待执行";
+      a.append(pre, badge);
+    }
 
     turn.append(q, a);
     box.appendChild(turn);
@@ -95,8 +211,8 @@ function renderConversation() {
   scroll.scrollTop = scroll.scrollHeight;
 }
 
-async function askQuestion() {
-  const q = document.getElementById("question").value.trim();
+async function askQuestion(acceptAssumptions = false, questionOverride = null) {
+  const q = (questionOverride || document.getElementById("question").value).trim();
   showError("");
   document.getElementById("sql-area").hidden = true;
   if (!q) {
@@ -109,17 +225,58 @@ async function askQuestion() {
     body: JSON.stringify({
       question: q,
       context: conversation.slice(-5).map((t) => ({ question: t.question, sql: t.sql })),
+      accept_assumptions: acceptAssumptions,
     }),
   });
   if (!res.ok) {
     let detail = "生成 SQL 失败";
-    try { detail = (await res.json()).detail || detail; } catch (_) {}
+    try {
+      const data = await res.json();
+      if (typeof data.detail === "string") detail = data.detail;
+      else if (data.detail) detail = JSON.stringify(data.detail);
+    } catch (_) {}
     showError(detail);
     return;
   }
   const data = await res.json();
   currentQuestion = q;
-  conversation.push({ question: q, sql: data.sql, status: "pending" });
+  currentPlan = data.plan || null;
+  if (!questionOverride) document.getElementById("question").value = "";
+  if (data.refused) {
+    conversation.push({
+      question: q,
+      sql: "",
+      status: "refused",
+      reason: data.reason || "",
+      plan: data.plan,
+      examples: data.examples || [],
+    });
+    if (conversation.length > 20) conversation = conversation.slice(-20);
+    renderConversation();
+    document.getElementById("sql-area").hidden = true;
+    return;
+  }
+  if (data.clarify) {
+    conversation.push({
+      question: q,
+      sql: "",
+      status: "clarify",
+      reason: (data.ambiguities || []).join("；"),
+      plan: data.plan,
+      examples: data.examples || [],
+    });
+    if (conversation.length > 20) conversation = conversation.slice(-20);
+    renderConversation();
+    document.getElementById("sql-area").hidden = true;
+    return;
+  }
+  conversation.push({
+    question: q,
+    sql: data.sql,
+    status: "pending",
+    plan: data.plan,
+    examples: data.examples || [],
+  });
   if (conversation.length > 20) conversation = conversation.slice(-20);
   renderConversation();
   document.getElementById("sql-editor").value = data.sql;
@@ -133,25 +290,46 @@ async function executeSql() {
     showError("SQL 不能为空");
     return;
   }
-  const res = await fetch("/api/execute", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question: currentQuestion, sql }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    showError(data.detail || "执行失败");
-    return;
+  const btn = document.getElementById("execute");
+  btn.disabled = true;
+  btn.textContent = "执行中…";
+  try {
+    const res = await fetch("/api/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: currentQuestion, sql, plan: currentPlan }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showError(
+        typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || "执行失败")
+      );
+      return;
+    }
+    if (data.corrected) {
+      const lastTurn = conversation[conversation.length - 1];
+      if (lastTurn) {
+        lastTurn.sql = data.sql;
+        lastTurn.status = "corrected";
+      }
+      document.getElementById("sql-editor").value = data.sql;
+      renderConversation();
+      showError(`执行失败：${data.error}（已自动纠正为上方 SQL，请审核后再次执行）`);
+      return;
+    }
+    const last = conversation[conversation.length - 1];
+    if (last && last.status === "pending") {
+      last.sql = sql;
+      last.status = "executed";
+      renderConversation();
+      document.getElementById("sql-area").hidden = true;
+    }
+    lastExecutedSql = sql;
+    renderResult(data);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "确认执行";
   }
-  const last = conversation[conversation.length - 1];
-  if (last && last.status === "pending") {
-    last.sql = sql;
-    last.status = "executed";
-    renderConversation();
-    document.getElementById("sql-area").hidden = true;
-  }
-  lastExecutedSql = sql;
-  renderResult(data);
 }
 
 /* ---------- 数据表页（T14）---------- */
@@ -167,6 +345,7 @@ async function loadTables() {
     return;
   }
   renderTables(await res.json());
+  loadRelations();
 }
 
 function renderTables(list) {
@@ -197,11 +376,25 @@ function renderTables(list) {
 
     const name = document.createElement("span");
     name.className = "meta-name";
-    name.textContent = t.table;
+    name.textContent = t.table + (t.is_deprecated ? "（已弃用）" : "");
 
     const cn = document.createElement("input");
     cn.placeholder = "表中文名";
     cn.value = t.cn_name || "";
+
+    const syn = document.createElement("input");
+    syn.placeholder = "同义词（逗号分隔）";
+    syn.value = t.synonyms || "";
+
+    const ctx = document.createElement("input");
+    ctx.placeholder = "业务上下文/注意事项";
+    ctx.value = t.context || "";
+
+    const dep = document.createElement("input");
+    dep.type = "checkbox";
+    dep.checked = !!t.is_deprecated;
+    const depLabel = document.createElement("label");
+    depLabel.append(dep, document.createTextNode("弃用"));
 
     const desc = document.createElement("input");
     desc.placeholder = "说明";
@@ -217,12 +410,19 @@ function renderTables(list) {
       const res = await fetch(`/api/semantic/tables/${encodeURIComponent(t.table)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cn_name: cn.value, description: desc.value }),
+        body: JSON.stringify({
+          cn_name: cn.value,
+          description: desc.value,
+          synonyms: syn.value,
+          context: ctx.value,
+          is_deprecated: dep.checked ? 1 : 0,
+        }),
       });
       showTablesMsg(res.ok ? `表 ${t.table} 已保存` : "保存失败");
+      if (res.ok) loadTables();
     });
 
-    row.append(name, cn, desc, colsBtn, save);
+    row.append(name, cn, syn, ctx, depLabel, desc, colsBtn, save);
     box.appendChild(row);
   }
 }
@@ -251,11 +451,25 @@ function renderColumns(table, cols) {
 
     const name = document.createElement("span");
     name.className = "meta-name";
-    name.textContent = `${c.column} (${c.type || "TEXT"})`;
+    name.textContent = `${c.column} (${c.type || "TEXT"})` + (c.is_deprecated ? "（已弃用）" : "");
 
     const cn = document.createElement("input");
     cn.placeholder = "字段中文名";
     cn.value = c.cn_name || "";
+
+    const syn = document.createElement("input");
+    syn.placeholder = "同义词";
+    syn.value = c.synonyms || "";
+
+    const ctx = document.createElement("input");
+    ctx.placeholder = "业务上下文";
+    ctx.value = c.context || "";
+
+    const dep = document.createElement("input");
+    dep.type = "checkbox";
+    dep.checked = !!c.is_deprecated;
+    const depLabel = document.createElement("label");
+    depLabel.append(dep, document.createTextNode("弃用"));
 
     const desc = document.createElement("input");
     desc.placeholder = "说明";
@@ -269,16 +483,87 @@ function renderColumns(table, cols) {
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cn_name: cn.value, description: desc.value }),
+          body: JSON.stringify({
+            cn_name: cn.value,
+            description: desc.value,
+            synonyms: syn.value,
+            context: ctx.value,
+            is_deprecated: dep.checked ? 1 : 0,
+          }),
         }
       );
       showTablesMsg(res.ok ? `字段 ${c.column} 已保存` : "保存失败");
+      if (res.ok) loadColumns(table);
     });
 
-    row.append(name, cn, desc, save);
+    row.append(name, cn, syn, ctx, depLabel, desc, save);
     box.appendChild(row);
   }
 }
+
+async function loadRelations() {
+  const res = await fetch("/api/semantic/relations");
+  if (!res.ok) return;
+  renderRelations(await res.json());
+}
+
+function renderRelations(list) {
+  const box = document.getElementById("relation-list");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!list.length) {
+    box.textContent = "（还没有表关系，可添加 JOIN 键）";
+    return;
+  }
+  for (const r of list) {
+    const row = document.createElement("div");
+    row.className = "meta-row";
+
+    const text = document.createElement("span");
+    text.className = "meta-name";
+    text.textContent =
+      `${r.left_table}.${r.left_column} = ${r.right_table}.${r.right_column}` +
+      (r.description ? `（${r.description}）` : "");
+
+    const del = document.createElement("button");
+    del.textContent = "删除";
+    del.addEventListener("click", async () => {
+      const res = await fetch(`/api/semantic/relations/${r.id}`, { method: "DELETE" });
+      showTablesMsg(res.ok ? "表关系已删除" : "删除失败");
+      if (res.ok) loadRelations();
+    });
+
+    row.append(text, del);
+    box.appendChild(row);
+  }
+}
+
+document.getElementById("rel-add").addEventListener("click", async () => {
+  const body = {
+    left_table: document.getElementById("rel-left-table").value.trim(),
+    left_column: document.getElementById("rel-left-column").value.trim(),
+    right_table: document.getElementById("rel-right-table").value.trim(),
+    right_column: document.getElementById("rel-right-column").value.trim(),
+    description: document.getElementById("rel-description").value.trim(),
+  };
+  showTablesMsg("");
+  if (!body.left_table || !body.left_column || !body.right_table || !body.right_column) {
+    showTablesMsg("请填写完整的左表/左字段/右表/右字段");
+    return;
+  }
+  const res = await fetch("/api/semantic/relations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    showTablesMsg("表关系已添加");
+    document.getElementById("rel-description").value = "";
+    await loadRelations();
+  } else {
+    showTablesMsg("添加失败");
+  }
+});
 
 document.getElementById("upload-btn").addEventListener("click", async () => {
   const file = document.getElementById("upload-file").files[0];
@@ -550,6 +835,36 @@ document.getElementById("history-clear").addEventListener("click", async () => {
 
 /* ---------- 导航切换 ---------- */
 
+async function loadStats() {
+  const box = document.getElementById("stats-card");
+  if (!box) return;
+  const res = await fetch("/api/feedback/stats");
+  if (!res.ok) return;
+  const s = await res.json();
+  box.innerHTML = "";
+  const items = [
+    ["查询数", s.queries ?? 0],
+    ["👍 赞", s.up ?? 0],
+    ["👎 踩", s.down ?? 0],
+    ["赞率", (s.up_rate ?? 0) + "%"],
+    [
+      "golden 通过",
+      `${(s.golden && s.golden.passed) ?? 0}/${(s.golden && s.golden.total) ?? 0}`,
+    ],
+  ];
+  for (const [label, value] of items) {
+    const item = document.createElement("div");
+    item.className = "stats-item";
+    const l = document.createElement("span");
+    l.className = "stats-label";
+    l.textContent = label;
+    const v = document.createElement("strong");
+    v.textContent = value;
+    item.append(l, v);
+    box.appendChild(item);
+  }
+}
+
 function showView(name) {
   const views = {
     ask: document.getElementById("view-ask"),
@@ -567,19 +882,131 @@ function showView(name) {
   });
   if (name === "tables") loadTables();
   if (name === "metrics") loadMetrics();
-  if (name === "history") loadHistory();
+  if (name === "history") {
+    loadHistory();
+    loadStats();
+  }
   if (name === "settings") {
     document.getElementById("settings-username").textContent = currentUser || "（未获取）";
+    loadGolden();
   }
 }
+
+async function loadGolden() {
+  const res = await fetch("/api/golden");
+  if (!res.ok) return;
+  renderGolden(await res.json());
+}
+
+function renderGolden(list) {
+  const box = document.getElementById("golden-list");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!list.length) {
+    box.textContent = "（还没有示例）";
+    return;
+  }
+  for (const g of list) {
+    const row = document.createElement("div");
+    row.className = "meta-row";
+    const q = document.createElement("span");
+    q.className = "meta-name";
+    q.textContent = g.question;
+    const sql = document.createElement("span");
+    sql.className = "meta-name";
+    sql.textContent = g.sql;
+    const del = document.createElement("button");
+    del.textContent = "删除";
+    del.addEventListener("click", async () => {
+      const res = await fetch(`/api/golden/${g.id}`, { method: "DELETE" });
+      document.getElementById("golden-msg").textContent = res.ok ? "示例已删除" : "删除失败";
+      if (res.ok) loadGolden();
+    });
+    row.append(q, sql, del);
+    box.appendChild(row);
+  }
+}
+
+document.getElementById("golden-add").addEventListener("click", async () => {
+  const body = {
+    question: document.getElementById("golden-question").value.trim(),
+    sql: document.getElementById("golden-sql").value.trim(),
+    tags: document.getElementById("golden-tags").value.trim(),
+  };
+  const msg = document.getElementById("golden-msg");
+  msg.textContent = "";
+  if (!body.question || !body.sql) {
+    msg.textContent = "请填写问题与 SQL";
+    return;
+  }
+  const res = await fetch("/api/golden", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    msg.textContent = "示例已添加";
+    document.getElementById("golden-question").value = "";
+    document.getElementById("golden-sql").value = "";
+    document.getElementById("golden-tags").value = "";
+    await loadGolden();
+  } else {
+    msg.textContent = "添加失败";
+  }
+});
 
 document.getElementById("brand").addEventListener("click", () => showView("ask"));
 document.querySelectorAll(".nav-item").forEach((b) => {
   b.addEventListener("click", () => showView(b.dataset.view));
 });
 
-document.getElementById("ask").addEventListener("click", askQuestion);
+document.getElementById("ask").addEventListener("click", () => askQuestion());
+document.getElementById("question").addEventListener("keydown", (e) => {
+  // Enter 发送；Ctrl/Cmd/Shift/Alt + Enter 换行
+  if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    askQuestion();
+  }
+});
 document.getElementById("execute").addEventListener("click", executeSql);
+document.getElementById("feedback-up").addEventListener("click", () => sendFeedback(1));
+document.getElementById("feedback-down").addEventListener("click", () => sendFeedback(-1));
+document.getElementById("raw-execute").addEventListener("click", async () => {
+  const sql = document.getElementById("raw-sql").value.trim();
+  const msg = document.getElementById("raw-msg");
+  msg.textContent = "";
+  if (!sql) {
+    msg.textContent = "请输入 SQL";
+    return;
+  }
+  const btn = document.getElementById("raw-execute");
+  btn.disabled = true;
+  btn.textContent = "执行中…";
+  try {
+    const res = await fetch("/api/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "手动 SQL", sql }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent =
+        typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || "执行失败");
+      return;
+    }
+    if (data.corrected) {
+      document.getElementById("raw-sql").value = data.sql;
+      msg.textContent = `执行失败：${data.error}（已自动纠正，请审核后再次执行）`;
+      return;
+    }
+    renderResult(data);
+    lastExecutedSql = sql;
+    msg.textContent = "已执行";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "执行 SQL";
+  }
+});
 document.getElementById("cancel").addEventListener("click", () => {
   const last = conversation[conversation.length - 1];
   if (last && last.status === "pending") last.status = "cancelled";
@@ -607,7 +1034,11 @@ document.getElementById("export-btn").addEventListener("click", async () => {
   });
   if (!res.ok) {
     let detail = "导出失败";
-    try { detail = (await res.json()).detail || detail; } catch (_) {}
+    try {
+      const data = await res.json();
+      if (typeof data.detail === "string") detail = data.detail;
+      else if (data.detail) detail = JSON.stringify(data.detail);
+    } catch (_) {}
     showError(detail);
     return;
   }

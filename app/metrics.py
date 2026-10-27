@@ -1,6 +1,6 @@
-"""指标定义 CRUD 与变更历史（T05/T06）。
+"""指标定义 CRUD 与变更历史（T05/T06，V3 增同义词）。
 
-指标字段：名称、口径、说明、关联表/字段、单位、适用维度。
+指标字段：名称、口径、说明、关联表/字段、单位、适用维度、同义词。
 每次更新前，把旧版本快照写入 metric_history（可追溯口径变化）。
 """
 from __future__ import annotations
@@ -11,11 +11,11 @@ from datetime import datetime
 from app.db import connect, execute_query, execute_statement
 
 _SELECT_COLUMNS = (
-    "id, name, formula, description, table_name, column_name, unit, dimensions, created_at, updated_at"
+    "id, name, formula, description, table_name, column_name, unit, dimensions, synonyms, created_at, updated_at"
 )
 
 _HISTORY_COLUMNS = (
-    "id, metric_id, name, formula, description, table_name, column_name, unit, dimensions, changed_at"
+    "id, metric_id, name, formula, description, table_name, column_name, unit, dimensions, synonyms, changed_at"
 )
 
 
@@ -33,8 +33,9 @@ def _row_to_dict(row) -> dict:
         "column_name": row[5],
         "unit": row[6],
         "dimensions": row[7],
-        "created_at": row[8],
-        "updated_at": row[9],
+        "synonyms": row[8],
+        "created_at": row[9],
+        "updated_at": row[10],
     }
 
 
@@ -58,15 +59,27 @@ def create_metric(
     column_name: str = "",
     unit: str = "",
     dimensions: str = "",
+    synonyms: str = "",
 ) -> dict:
     now = _now()
     with closing(connect()) as conn:
         with conn:
             cursor = conn.execute(
                 "INSERT INTO metrics "
-                "(name, formula, description, table_name, column_name, unit, dimensions, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, formula, description, table_name, column_name, unit, dimensions, now, now),
+                "(name, formula, description, table_name, column_name, unit, dimensions, synonyms, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    name,
+                    formula,
+                    description,
+                    table_name,
+                    column_name,
+                    unit,
+                    dimensions,
+                    synonyms,
+                    now,
+                    now,
+                ),
             )
             new_id = int(cursor.lastrowid)
     return get_metric(new_id)
@@ -76,8 +89,8 @@ def _snapshot(metric: dict) -> None:
     """把指标旧版本快照写入 metric_history。"""
     execute_statement(
         "INSERT INTO metric_history "
-        "(metric_id, name, formula, description, table_name, column_name, unit, dimensions, changed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(metric_id, name, formula, description, table_name, column_name, unit, dimensions, synonyms, changed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             metric["id"],
             metric["name"],
@@ -87,6 +100,7 @@ def _snapshot(metric: dict) -> None:
             metric["column_name"],
             metric["unit"],
             metric["dimensions"],
+            metric.get("synonyms", ""),
             _now(),
         ),
     )
@@ -101,6 +115,7 @@ def update_metric(
     column_name: str = "",
     unit: str = "",
     dimensions: str = "",
+    synonyms: str = "",
 ) -> dict | None:
     old = get_metric(metric_id)
     if old is None:
@@ -110,8 +125,19 @@ def update_metric(
     now = _now()
     result = execute_statement(
         "UPDATE metrics SET name = ?, formula = ?, description = ?, table_name = ?, "
-        "column_name = ?, unit = ?, dimensions = ?, updated_at = ? WHERE id = ?",
-        (name, formula, description, table_name, column_name, unit, dimensions, now, metric_id),
+        "column_name = ?, unit = ?, dimensions = ?, synonyms = ?, updated_at = ? WHERE id = ?",
+        (
+            name,
+            formula,
+            description,
+            table_name,
+            column_name,
+            unit,
+            dimensions,
+            synonyms,
+            now,
+            metric_id,
+        ),
     )
     if result["row_count"] == 0:
         return None
@@ -135,7 +161,8 @@ def list_metric_history(metric_id: int) -> list[dict]:
             "column_name": r[6],
             "unit": r[7],
             "dimensions": r[8],
-            "changed_at": r[9],
+            "synonyms": r[9],
+            "changed_at": r[10],
         }
         for r in rows
     ]

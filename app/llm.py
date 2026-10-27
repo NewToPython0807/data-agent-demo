@@ -1,14 +1,14 @@
-"""云端大模型调用（T15）。
+"""云端大模型调用（T15 / V3-T10）。
 
-调用 DeepSeek（OpenAI 兼容接口）把中文问题转换为 SQL。
-处理：未配置密钥、超时/网络失败重试、非 200、空返回等，统一抛 LLMError。
+调用 DeepSeek（OpenAI 兼容接口）把中文问题转换为 SQL；
+V3 增加“先计划、后 SQL”的生成入口（原文返回，解析见 app.plan）。
 """
 from __future__ import annotations
 
 import httpx
 
 from app.config import settings
-from app.prompt import build_prompt
+from app.prompt import build_correction_prompt, build_plan_prompt, build_prompt
 
 
 class LLMError(Exception):
@@ -30,12 +30,11 @@ def _extract_sql(text: str) -> str:
     return text
 
 
-def generate_sql(question: str, context: list[dict] | None = None) -> str:
-    """调用 LLM 生成 SQL，返回 SQL 文本（失败抛 LLMError）。"""
+def _chat(prompt: str) -> str:
+    """调用模型，返回文本内容（失败抛 LLMError）。"""
     if not settings.deepseek_api_key:
         raise LLMError("未配置 DEEPSEEK_API_KEY，请在 .env 中设置")
 
-    prompt = build_prompt(question, context)
     payload = {
         "model": settings.deepseek_model,
         "messages": [{"role": "user", "content": prompt}],
@@ -64,10 +63,32 @@ def generate_sql(question: str, context: list[dict] | None = None) -> str:
         except (ValueError, KeyError, IndexError) as exc:
             last_err = f"解析模型返回失败：{exc}"
             continue
-        sql = _extract_sql(content)
-        if not sql:
-            last_err = "模型未返回 SQL 内容"
+        if not (content or "").strip():
+            last_err = "模型返回内容为空"
             continue
-        return sql
+        return content
 
     raise LLMError(last_err)
+
+
+def generate_sql(question: str, context: list[dict] | None = None) -> str:
+    """调用 LLM 生成 SQL，返回 SQL 文本（失败抛 LLMError）。"""
+    content = _chat(build_prompt(question, context))
+    sql = _extract_sql(content)
+    if not sql:
+        raise LLMError("模型未返回 SQL 内容")
+    return sql
+
+
+def generate_plan_text(question: str, context: list[dict] | None = None) -> str:
+    """调用 LLM 生成“查询计划 + SQL”原文（解析见 app.plan）。"""
+    return _chat(build_plan_prompt(question, context))
+
+
+def generate_correction(question: str, sql: str, error: str) -> str:
+    """调用 LLM 修正执行失败的 SQL（返回 SQL 文本）。"""
+    content = _chat(build_correction_prompt(question, sql, error))
+    corrected = _extract_sql(content)
+    if not corrected:
+        raise LLMError("模型未返回修正后的 SQL")
+    return corrected

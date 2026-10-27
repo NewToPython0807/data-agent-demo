@@ -70,6 +70,9 @@ class Settings:
     # 上传大小上限（MB）
     max_upload_mb: int = 50
 
+    # SQL 自动纠错重试次数（V3）
+    max_sql_corrections: int = 2
+
     @classmethod
     def load(cls) -> "Settings":
         file_values = _load_dotenv(BASE_DIR / ".env")
@@ -103,6 +106,7 @@ class Settings:
             llm_timeout_seconds=int(get("LLM_TIMEOUT_SECONDS", "60")),
             multi_turn_context_rounds=int(get("MULTI_TURN_CONTEXT_ROUNDS", "5")),
             max_upload_mb=int(get("MAX_UPLOAD_MB", "50")),
+            max_sql_corrections=int(get("MAX_SQL_CORRECTIONS", "2")),
         )
 
     @property

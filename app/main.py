@@ -15,11 +15,21 @@ from pydantic import BaseModel
 
 from app.auth import create_session_token, get_current_user, verify_password
 from app.config import BASE_DIR, settings, setup_logging
+from app.correct import correct_sql
 from app.db import DatabaseError, execute_query
 from app.export import build_csv
+from app.feedback import add_feedback, feedback_stats, init_feedback_table
+from app.golden import (
+    create_golden,
+    delete_golden,
+    init_golden_table,
+    list_golden,
+    match_golden,
+)
 from app.history import add_history, clear_history, get_history, init_history_table, list_history
-from app.llm import LLMError, generate_sql
+from app.llm import LLMError, generate_plan_text, generate_sql
 from app.metric_resolver import resolve_metric_question
+from app.plan import build_refusal, parse_plan_response, should_refuse
 from app.metrics import (
     create_metric,
     delete_metric,
@@ -30,15 +40,20 @@ from app.metrics import (
 )
 from app.schema import get_user_schema
 from app.semantic import (
+    create_relation,
+    delete_relation,
     get_semantic_layer,
     init_semantic_tables,
     list_columns_with_meta,
+    list_relations,
     list_tables_with_meta,
+    update_relation,
     upsert_column_meta,
     upsert_table_meta,
 )
 from app.sqlguard import SQLGuardError, assert_read_only
 from app.upload import UploadError, save_and_import
+from app.validate import check_result
 
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -46,6 +61,8 @@ logger = logging.getLogger(__name__)
 settings.ensure_dirs()
 init_history_table()
 init_semantic_tables()
+init_golden_table()
+init_feedback_table()
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
@@ -74,11 +91,14 @@ class ContextTurn(BaseModel):
 class AskRequest(BaseModel):
     question: str
     context: list[ContextTurn] | None = None
+    accept_assumptions: bool = False
+    clarification: str = ""
 
 
 class ExecuteRequest(BaseModel):
     question: str
     sql: str
+    plan: dict | None = None
 
 
 class ExportRequest(BaseModel):
@@ -88,6 +108,9 @@ class ExportRequest(BaseModel):
 class MetaUpdate(BaseModel):
     cn_name: str = ""
     description: str = ""
+    synonyms: str = ""
+    context: str = ""
+    is_deprecated: int = 0
 
 
 class MetricCreate(BaseModel):
@@ -98,6 +121,29 @@ class MetricCreate(BaseModel):
     column_name: str = ""
     unit: str = ""
     dimensions: str = ""
+    synonyms: str = ""
+
+
+class RelationCreate(BaseModel):
+    left_table: str
+    left_column: str
+    right_table: str
+    right_column: str
+    description: str = ""
+
+
+class GoldenCreate(BaseModel):
+    question: str
+    sql: str
+    tags: str = ""
+
+
+class FeedbackCreate(BaseModel):
+    history_id: int | None = None
+    question: str = ""
+    sql: str = ""
+    rating: int
+    comment: str = ""
 
 
 @app.post("/api/login")
@@ -160,7 +206,14 @@ def semantic_table_update(
     table_name: str, body: MetaUpdate, username: str = Depends(get_current_user)
 ) -> dict:
     """保存表级中文名/说明。"""
-    return upsert_table_meta(table_name, body.cn_name, body.description)
+    return upsert_table_meta(
+        table_name,
+        body.cn_name,
+        body.description,
+        body.synonyms,
+        body.context,
+        body.is_deprecated,
+    )
 
 
 @app.get("/api/semantic/tables/{table_name}/columns")
@@ -179,7 +232,105 @@ def semantic_column_update(
     username: str = Depends(get_current_user),
 ) -> dict:
     """保存字段级中文名/说明。"""
-    return upsert_column_meta(table_name, column_name, body.cn_name, body.description)
+    return upsert_column_meta(
+        table_name,
+        column_name,
+        body.cn_name,
+        body.description,
+        body.synonyms,
+        body.context,
+        body.is_deprecated,
+    )
+
+
+@app.get("/api/semantic/relations")
+def relations_list(username: str = Depends(get_current_user)) -> list[dict]:
+    """表关系列表（受鉴权保护）。"""
+    return list_relations()
+
+
+@app.post("/api/semantic/relations")
+def relations_create(
+    body: RelationCreate, username: str = Depends(get_current_user)
+) -> dict:
+    """新增表关系。"""
+    return create_relation(
+        body.left_table,
+        body.left_column,
+        body.right_table,
+        body.right_column,
+        body.description,
+    )
+
+
+@app.put("/api/semantic/relations/{relation_id}")
+def relations_update(
+    relation_id: int, body: RelationCreate, username: str = Depends(get_current_user)
+) -> dict:
+    """更新表关系。"""
+    item = update_relation(
+        relation_id,
+        body.left_table,
+        body.left_column,
+        body.right_table,
+        body.right_column,
+        body.description,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="表关系不存在")
+    return item
+
+
+@app.delete("/api/semantic/relations/{relation_id}")
+def relations_delete(
+    relation_id: int, username: str = Depends(get_current_user)
+) -> dict:
+    """删除表关系。"""
+    if not delete_relation(relation_id):
+        raise HTTPException(status_code=404, detail="表关系不存在")
+    return {"ok": True}
+
+
+@app.post("/api/feedback")
+def feedback_create(
+    body: FeedbackCreate, username: str = Depends(get_current_user)
+) -> dict:
+    """结果赞/踩（rating: 1 赞，-1 踩）。"""
+    if body.rating not in (1, -1):
+        raise HTTPException(status_code=400, detail="rating 必须为 1（赞）或 -1（踩）")
+    return add_feedback(
+        body.history_id, body.question, body.sql, body.rating, body.comment
+    )
+
+
+@app.get("/api/feedback/stats")
+def feedback_stats_api(username: str = Depends(get_current_user)) -> dict:
+    """反馈/查询/golden 统计（T23）。"""
+    from app.eval import golden_stats
+
+    stats = feedback_stats()
+    stats["golden"] = golden_stats()
+    return stats
+
+
+@app.get("/api/golden")
+def golden_list(username: str = Depends(get_current_user)) -> list[dict]:
+    """Golden SQL 示例列表。"""
+    return list_golden()
+
+
+@app.post("/api/golden")
+def golden_create(body: GoldenCreate, username: str = Depends(get_current_user)) -> dict:
+    """新增 Golden SQL 示例。"""
+    return create_golden(body.question, body.sql, body.tags)
+
+
+@app.delete("/api/golden/{golden_id}")
+def golden_delete(golden_id: int, username: str = Depends(get_current_user)) -> dict:
+    """删除 Golden SQL 示例。"""
+    if not delete_golden(golden_id):
+        raise HTTPException(status_code=404, detail="示例不存在")
+    return {"ok": True}
 
 
 @app.get("/api/history")
@@ -224,21 +375,56 @@ async def upload(
 
 @app.post("/api/ask")
 def ask(body: AskRequest, username: str = Depends(get_current_user)) -> dict:
-    """自然语言 → SQL（仅生成，不执行；SQL 由前端展示给用户审核）。"""
+    """自然语言 → 查询计划 + SQL（仅生成，不执行；展示给用户审核）。"""
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="问题不能为空")
 
     # 指标直查快路径：裸指标问法（如“销售额”“销售额是多少”）按口径直接展开
     fast_sql = resolve_metric_question(body.question)
     if fast_sql:
-        return {"sql": fast_sql, "source": "metric"}
+        return {"sql": fast_sql, "plan": None, "examples": [], "source": "metric"}
 
+    question = body.question
+    if body.clarification.strip():
+        question = f"{question}（补充说明：{body.clarification.strip()}）"
+
+    examples = match_golden(question)
     context = [{"question": t.question, "sql": t.sql} for t in (body.context or [])]
     try:
-        sql = generate_sql(body.question, context)
+        raw = generate_plan_text(question, context)
     except LLMError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    return {"sql": sql}
+    parsed = parse_plan_response(raw)
+    plan = parsed["plan"]
+    if should_refuse(plan):
+        return {
+            "refused": True,
+            "reason": build_refusal(plan),
+            "missing": plan.get("missing", []),
+            "plan": plan,
+            "examples": examples,
+            "sql": "",
+            "source": "llm",
+        }
+
+    # 关键歧义：先澄清（除非用户已补充说明或选择“按假设继续”）
+    if (
+        plan
+        and plan.get("ambiguities")
+        and not body.accept_assumptions
+        and not body.clarification.strip()
+    ):
+        return {
+            "clarify": True,
+            "ambiguities": plan["ambiguities"],
+            "assumptions": plan.get("assumptions", []),
+            "plan": plan,
+            "examples": examples,
+            "sql": "",
+            "source": "llm",
+        }
+
+    return {"sql": parsed["sql"], "plan": plan, "examples": examples, "source": "llm"}
 
 
 @app.post("/api/execute")
@@ -247,16 +433,28 @@ def execute(body: ExecuteRequest, username: str = Depends(get_current_user)) -> 
     try:
         assert_read_only(body.sql)
         result = execute_query(body.sql)
-        history_id = add_history(body.question, body.sql, result)
+        history_id = add_history(body.question, body.sql, result, plan=body.plan)
     except SQLGuardError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except DatabaseError as exc:
+        corrected = correct_sql(body.question, body.sql, str(exc))
+        if corrected:
+            return {
+                "corrected": True,
+                "sql": corrected,
+                "error": str(exc),
+                "columns": [],
+                "rows": [],
+                "row_count": 0,
+                "history_id": None,
+            }
         raise HTTPException(status_code=400, detail=str(exc))
     return {
         "columns": result["columns"],
         "rows": result["rows"],
         "row_count": result["row_count"],
         "history_id": history_id,
+        "warnings": check_result(result),
     }
 
 
@@ -297,6 +495,7 @@ def metrics_create(
         body.column_name,
         body.unit,
         body.dimensions,
+        body.synonyms,
     )
 
 
@@ -331,6 +530,7 @@ def metrics_update(
         body.column_name,
         body.unit,
         body.dimensions,
+        body.synonyms,
     )
     if item is None:
         raise HTTPException(status_code=404, detail="指标不存在")
