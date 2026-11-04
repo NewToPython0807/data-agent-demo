@@ -146,7 +146,19 @@ function makePlanCard(plan) {
   if ((plan.order_by || []).length) lines.push("排序：" + plan.order_by.join("、"));
   if (plan.limit !== null && plan.limit !== undefined) lines.push("限制：" + plan.limit);
   if ((plan.assumptions || []).length) lines.push("假设：" + plan.assumptions.join("；"));
-  if ((plan.ambiguities || []).length) lines.push("歧义：" + plan.ambiguities.join("；"));
+  const ambiguities = plan.ambiguities || [];
+  if (ambiguities.length) {
+    lines.push(
+      "歧义：" +
+        ambiguities
+          .map((a) => {
+            if (typeof a === "string") return a;
+            const tag = a.level === "blocking" ? "需确认" : "假设";
+            return `[${tag}] ${a.text || ""}`;
+          })
+          .join("；")
+    );
+  }
   if ((plan.missing || []).length) lines.push("缺失：" + plan.missing.join("、"));
 
   const body = document.createElement("pre");

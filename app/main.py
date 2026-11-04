@@ -29,7 +29,7 @@ from app.golden import (
 from app.history import add_history, clear_history, get_history, init_history_table, list_history
 from app.llm import LLMError, generate_plan_text, generate_sql
 from app.metric_resolver import resolve_metric_question
-from app.plan import build_refusal, parse_plan_response, should_refuse
+from app.plan import build_refusal, parse_plan_response, should_refuse, split_ambiguities
 from app.metrics import (
     create_metric,
     delete_metric,
@@ -407,17 +407,13 @@ def ask(body: AskRequest, username: str = Depends(get_current_user)) -> dict:
             "source": "llm",
         }
 
-    # 关键歧义：先澄清（除非用户已补充说明或选择“按假设继续”）
-    if (
-        plan
-        and plan.get("ambiguities")
-        and not body.accept_assumptions
-        and not body.clarification.strip()
-    ):
+    # 仅 blocking 歧义打断用户；assumption 直接继续（V3.1，D1/D2 A）
+    blocking, plan_assumptions = split_ambiguities(plan)
+    if blocking and not body.accept_assumptions and not body.clarification.strip():
         return {
             "clarify": True,
-            "ambiguities": plan["ambiguities"],
-            "assumptions": plan.get("assumptions", []),
+            "ambiguities": blocking,
+            "assumptions": list(plan.get("assumptions") or []) + plan_assumptions,
             "plan": plan,
             "examples": examples,
             "sql": "",

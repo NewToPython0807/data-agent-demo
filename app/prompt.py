@@ -153,8 +153,8 @@ _PLAN_FIELDS = """{
   "group_by": ["列名"],
   "order_by": ["列名 DESC"],
   "limit": null,
-  "assumptions": ["你做的假设"],
-  "ambiguities": ["需要用户澄清的歧义"],
+  "assumptions": ["你做的假设（含默认时间/全历史等）"],
+  "ambiguities": [{"text": "需要用户澄清的业务歧义", "level": "blocking"}],
   "missing": []
 }"""
 
@@ -199,6 +199,11 @@ def build_plan_prompt(question: str, context: list[dict] | None = None) -> str:
         "3. 不要编造表/字段；不确定的写入 assumptions 或 ambiguities。",
         "4. 同义词/业务术语结合“同义词”字段理解；标记【已弃用】的表/字段慎用。",
         "5. SQL 只读，一条 SELECT，符合 SQLite 语法。",
+        "6. ambiguities 只列业务歧义（时间基准/指标定义/统计范围），每条给 level："
+        "blocking（会改变结果、需要用户回答）或 assumption（已给默认值、可直接继续）。",
+        "7. 字段取值（Y/N、1/0）、is_xxx_flag、date_key、是否剔除冲正、默认全历史等"
+        "实现细节一律写入 assumptions，不得写入 ambiguities。",
+        "8. 没有 blocking 歧义时，ambiguities 返回空数组。",
         "",
         "数据库表结构与语义：",
         schema_text,
