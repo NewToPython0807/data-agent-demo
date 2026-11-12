@@ -6,3 +6,16 @@ venv/
 data/
 *.tar.gz
 .DS_Store
+
+# 本地测试/评测脚本与产物（不同步到 GitHub）
+test_*.py
+run_golden.py
+build_golden_v31.py
+golden_cases_v31.json
+golden_results.json
+eval_v2/
+eval_work/
+run_eval.py
+eval_results.csv
+eval_results.json
+eval_cases_credit_card.json

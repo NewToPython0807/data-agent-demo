@@ -1,8 +1,8 @@
 """信用卡维度模型造数脚本（V3）。
 
 生成 10 张维度表 + 4 张事实表，写入当前 data/agent.db，并落地语义层。
-运行：
-    .venv\\Scripts\\python seed_credit_card.py
+运行（项目根目录）：
+    .venv\\Scripts\\python -m scripts.seed_credit_card
 
 设计要点：
 - 固定随机种子（42），可重复；
@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import date, datetime, timedelta
 
 from app.db import connect
-from seed_credit_card_semantic import write_semantic_layer
+from scripts.seed_credit_card_semantic import write_semantic_layer
 
 RNG = random.Random(42)
 
@@ -385,6 +385,8 @@ def main() -> None:
                             ("FEE_OTHER", 4), ("INT_CHG", 5), ("INSTALL", 4), ("PMT_DBIT", 3)]
             txn_rows = []
             purchases_by_account = {}
+            # (账户, 年月) -> 交易分类汇总，供账单金额派生（V3.1，D6 A）
+            month_sums: dict = {}
             for i in range(1, TXN_N + 1):
                 acc = RNG.choice(accounts)
                 cards = cards_by_account[acc["sk"]]
@@ -436,12 +438,26 @@ def main() -> None:
                     channel = RNG.choices(["POS", "ECOM", "APP", "QUICK_PAY"], [0.5, 0.2, 0.2, 0.1])[0]
                 points = int(amount * products[card["product"]]) if ttype in ("PURCH", "INSTALL") else 0
                 redeemed = int(RNG.uniform(100, 5000)) if RNG.random() < 0.01 else 0
+                cny = money(amount * fx)
                 tid = f"T{i:012d}"
                 txn_rows.append((
                     tid, ts(dt), dkey(dt.date()), dkey(dt.date()), acc["customer"], acc["sk"], card["sk"],
-                    merchant, ttype, channel, ccy, auth, amount, money(amount * fx), fx,
+                    merchant, ttype, channel, ccy, auth, amount, cny, fx,
                     term, max(0, points), redeemed, is_rev, original,
                 ))
+                if ttype in ("PURCH", "INSTALL", "CASH_ADV", "ANN_FEE", "FEE_OTHER", "INT_CHG"):
+                    bucket = month_sums.setdefault(
+                        (acc["sk"], (dt.year, dt.month)),
+                        {"purch": 0.0, "cash": 0.0, "fee": 0.0, "interest": 0.0},
+                    )
+                    if ttype in ("PURCH", "INSTALL"):
+                        bucket["purch"] += cny
+                    elif ttype == "CASH_ADV":
+                        bucket["cash"] += cny
+                    elif ttype in ("ANN_FEE", "FEE_OTHER"):
+                        bucket["fee"] += cny
+                    else:
+                        bucket["interest"] += cny
                 if ttype == "PURCH":
                     purchases_by_account.setdefault(acc["sk"], []).append(
                         {"id": tid, "amount": amount, "merchant": merchant}
@@ -470,10 +486,11 @@ def main() -> None:
                 items.sort(key=lambda x: x[1])
                 prev = 0.0
                 for acc, e in items:
-                    new_p = money(RNG.uniform(0, 20000))
-                    cash = money(RNG.uniform(0, 5000))
-                    fee = money(RNG.uniform(0, 500))
-                    interest = money(RNG.uniform(0, 800))
+                    sums = month_sums.get((acc_sk, (e.year, e.month)), {})
+                    new_p = money(sums.get("purch", 0.0))
+                    cash = money(sums.get("cash", 0.0))
+                    fee = money(sums.get("fee", 0.0))
+                    interest = money(sums.get("interest", 0.0))
                     total = money(prev + new_p + cash + fee + interest)
                     minimum = money(total * 0.1)
                     due = e + timedelta(days=acc["due_days"])
@@ -491,37 +508,44 @@ def main() -> None:
                         "Y" if RNG.random() < 0.1 else "N",
                     ))
                     cycles_by_account.setdefault(acc_sk, []).append(
-                        {"id": bc_id, "due": due, "total": total, "statement": e}
+                        {
+                            "id": bc_id,
+                            "due": due,
+                            "total": total,
+                            "statement": e,
+                            "account_sk": acc_sk,
+                            "ccy": acc["ccy"],
+                        }
                     )
                     prev = total
             conn.executemany("INSERT INTO fct_billing_cycle VALUES (" + ",".join("?" * 18) + ")", billing_rows)
 
-            # ---------- 还款事实 ----------
+            # ---------- 还款事实（按账单周期生成，金额 ≤ 该期应还） ----------
+            all_cycles = []
+            for items in cycles_by_account.values():
+                all_cycles.extend(items)
+            payable = [c for c in all_cycles if float(c["total"]) > 0]
+            selected = RNG.sample(payable, min(REPAY_N, len(payable)))
             repay_rows = []
-            for i in range(1, REPAY_N + 1):
-                acc = RNG.choice(accounts)
-                cyc = None
-                if cycles_by_account.get(acc["sk"]) and RNG.random() < 0.9:
-                    cyc = RNG.choice(cycles_by_account[acc["sk"]])
-                start = max(START, acc["open"])
-                end = acc["close"] if acc["close"] and acc["close"] < END else END
-                dt = rand_date(start, end)
-                amount = money(RNG.uniform(100, 20000))
-                overpay = money(amount * RNG.uniform(0, 0.08))
+            for i, cyc in enumerate(selected, 1):
+                total = float(cyc["total"])
+                amount = money(total * RNG.uniform(0.6, 1.0))
+                overpay = 0.0
                 fee = money(amount * RNG.uniform(0, 0.03))
                 interest = money(amount * RNG.uniform(0, 0.15))
-                principal = money(amount - overpay - fee - interest)
+                principal = money(amount - fee - interest)
                 if principal < 0:
                     principal = 0.0
-                on_time = "N"
-                if cyc:
-                    on_time = "Y" if dt <= cyc["due"] else "N"
+                end = cyc["due"] + timedelta(days=5)
+                if end > END:
+                    end = END
+                dt = rand_date(cyc["statement"], end)
+                on_time = "Y" if dt <= cyc["due"] else "N"
                 repay_rows.append((
-                    f"R{i:012d}", acc["sk"], dkey(dt),
-                    cyc["id"] if cyc else None,
-                    RNG.choice(["COUNTER", "APP", "ATM", "QUICK_PAY"]), acc["ccy"],
+                    f"R{i:012d}", cyc["account_sk"], dkey(dt), cyc["id"],
+                    RNG.choice(["COUNTER", "APP", "ATM", "QUICK_PAY"]), cyc["ccy"],
                     amount, principal, interest, fee, overpay, 0,
-                    on_time, "Y" if RNG.random() < 0.3 else "N",
+                    on_time, "Y" if amount < total else "N",
                 ))
             conn.executemany("INSERT INTO fct_repayment VALUES (" + ",".join("?" * 14) + ")", repay_rows)
 

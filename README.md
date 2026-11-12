@@ -62,19 +62,21 @@ app/                          后端模块
   eval.py                     golden queries 回归（python -m app.eval）
   llm.py / db.py / auth.py / importer.py / export.py / history.py / upload.py 等
 static/                       前端（index.html / login.html / app.js / app.css）
-docs/                         V2 / V3 文档（PRD / 开发计划 / 验收清单）
+scripts/                      造数与运维脚本（python -m scripts.xxx）
+  seed_credit_card.py         V3 信用卡维度模型造数（14 张表）
+  seed_credit_card_semantic.py 维度模型 → 语义层落地
+  seed_check.py               造数检核（主键/外键/公式/状态）
+  seed_data_v2.py             V2 演示造数（regions / customers / products / orders）
+  cleanup_demo_tables.py      V3.1 清理演示/测试表
+  update_metric_*.py          V3.1 指标口径修正
+config/                       golden_queries.json（golden 回归用例）
+docs/                         PRD / 开发计划 / 验收清单 / 部署记录 / 评测报告
 data/                         运行时生成：agent.db、日志（已 gitignore）
-deploy.md                     云端部署操作记录
+eval_v2/                      本地评测（用例 / 执行器 / 报告；已 gitignore）
 Dockerfile                    镜像定义
 docker-compose.yml            编排（数据卷 + .env 挂载）
 .env.example                  配置模板
 requirements.txt              Python 依赖
-seed_data_v2.py               V2 演示造数（regions / customers / products / orders）
-seed_credit_card.py           V3 信用卡维度模型造数（14 张表）
-seed_credit_card_semantic.py  维度模型 → 语义层落地
-seed_check.py                 造数检核（主键/外键/公式/状态）
-golden_queries.json           golden 回归用例
-credit_card_dimensional_model_v2.md  信用卡维度模型 v2（造数蓝本）
 ```
 
 ---
@@ -99,7 +101,7 @@ python -m venv .venv
 
 ## 云端部署
 
-见 [deploy.md](./deploy.md)（腾讯云轻量 + Docker + 数据持久化完整步骤）。
+见 [docs/deploy.md](./docs/deploy.md)（腾讯云轻量 + Docker + 数据持久化完整步骤）。
 
 ---
 
@@ -140,16 +142,16 @@ python -m venv .venv
 
 ```powershell
 cd "C:\Users\Administrator\Desktop\data agent"
-.venv\Scripts\python seed_credit_card.py
-.venv\Scripts\python seed_check.py
+.venv\Scripts\python -m scripts.seed_credit_card
+.venv\Scripts\python -m scripts.seed_check
 ```
 
 - **维度**：`dim_date`(1461) / `dim_customer`(5000) / `dim_account`(8000) / `dim_card`(12000) / `dim_card_product`(4) / `dim_merchant`(500) / `dim_transaction_type`(8) / `dim_channel`(6) / `dim_currency`(3) / `dim_status`(8)
 - **事实**：`fct_transaction`(100000) / `fct_billing_cycle`(50000) / `fct_repayment`(30000) / `fct_account_monthly_snapshot`(40000)
-- **语义层**：14 表中文名、189 个字段中文名、16 个指标、26 条表关系
+- **语义层**：14 表中文名、189 个字段中文名、17 个指标、26 条表关系
 - 固定随机种子，可重复；检核覆盖主键 / 外键 / 日期 / 金额 / 公式 / 逾期 / 冲正 / 主卡 / 语义层
 
-> V2 的演示造数 `seed_data_v2.py` 仍保留（regions / customers / products / orders）。
+> V2 的演示造数仍保留：`python -m scripts.seed_data_v2`（regions / customers / products / orders）。
 
 ## golden queries 回归
 
@@ -160,7 +162,7 @@ cd "C:\Users\Administrator\Desktop\data agent"
 
 ## 常见问题
 
-- **Docker 构建拉不动 `python:3.11-slim`**：给 Docker 配国内镜像加速（见 deploy.md 第 2 步）。
+- **Docker 构建拉不动 `python:3.11-slim`**：给 Docker 配国内镜像加速（见 docs/deploy.md 第 2 步）。
 - **Compose 报 `$` 变量警告**：`.env` 里 bcrypt 哈希含 `$`；不影响应用（`.env` 只读挂载、由应用自身解析），可忽略或加 `--env-file /dev/null`。
 - **外网打不开 8000**：腾讯云控制台防火墙放行 TCP 8000。
 - **登录提示未配置账号**：`.env` 没被读到，确认 `ACCOUNT_USERNAME` 与 `ACCOUNT_PASSWORD_HASH` 已填写并重启。
@@ -176,7 +178,10 @@ cd "C:\Users\Administrator\Desktop\data agent"
 - [docs/PRD-v3.md](./docs/PRD-v3.md) — 第三版需求
 - [docs/DEVELOPMENT_PLAN-v3.md](./docs/DEVELOPMENT_PLAN-v3.md) — 第三版开发计划
 - [docs/验收清单-v3.md](./docs/验收清单-v3.md) — 第三版验收记录
-- [credit_card_dimensional_model_v2.md](./credit_card_dimensional_model_v2.md) — 信用卡维度模型 v2（造数蓝本）
+- [docs/AGENT_EVAL_PLAN-v2.md](./docs/AGENT_EVAL_PLAN-v2.md) — Agent 问答效果评测方案（80 条用例 / 双协议）
+- [docs/AGENT_EVAL_REPORT-v2.md](./docs/AGENT_EVAL_REPORT-v2.md) — Agent 问答效果评估报告（准确率 / 拒答 / 澄清 / 延迟）
+- [docs/credit_card_dimensional_model_v2.md](./docs/credit_card_dimensional_model_v2.md) — 信用卡维度模型 v2（造数蓝本）
+- [docs/deploy.md](./docs/deploy.md) — 云端部署操作记录
 
 ## 变更记录
 

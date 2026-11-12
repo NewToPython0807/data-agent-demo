@@ -5,6 +5,10 @@ __pycache__/
 .env
 data/
 check_*.py
+eval_v2/
+eval_work/
+test_*.py
+*.tar.gz
 docs/
 PRD.md
 DEVELOPMENT_PLAN.md

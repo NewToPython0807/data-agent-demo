@@ -9,14 +9,31 @@ from __future__ import annotations
 import re
 
 
+def _terms(metric: dict) -> list[str]:
+    """指标名 + 同义词（支持中英文逗号）。"""
+    name = str(metric.get("name") or "").strip()
+    synonyms = str(metric.get("synonyms") or "").replace("，", ",")
+    parts = [p.strip() for p in synonyms.split(",") if p.strip()]
+    return ([name] if name else []) + parts
+
+
 def match_metrics(question: str) -> list[dict]:
-    """返回问题中提到的指标（按指标名子串匹配）。"""
+    """返回问题中提到的指标（按指标名/同义词子串匹配，去重）。"""
     from app.metrics import list_metrics
 
-    q = question or ""
-    if not q.strip():
+    q = (question or "").strip()
+    if not q:
         return []
-    return [m for m in list_metrics() if m.get("name") and m["name"] in q]
+    out: list[dict] = []
+    seen = set()
+    for metric in list_metrics():
+        if any(term and term in q for term in _terms(metric)):
+            key = metric.get("id") or metric.get("name")
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(metric)
+    return out
 
 
 def metric_sql(metric: dict) -> str:
@@ -30,13 +47,13 @@ def metric_sql(metric: dict) -> str:
 
 
 def resolve_metric_question(question: str) -> str | None:
-    """裸指标问法（如“销售额”“销售额是多少”）返回按口径展开的 SQL，否则 None。"""
+    """裸指标问法（名称或同义词）返回按口径展开的 SQL，否则 None。"""
     metrics = match_metrics(question)
     if len(metrics) != 1:
         return None
     metric = metrics[0]
     q = (question or "").strip().rstrip("?？").strip()
     q = re.sub(r"(是多少|多少|合计|总计|一共|总共)$", "", q).strip()
-    if q != metric["name"]:
+    if q not in _terms(metric):
         return None
     return metric_sql(metric) or None

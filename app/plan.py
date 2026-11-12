@@ -61,12 +61,13 @@ def _as_list(value) -> list:
 # 实现细节/默认假设：不应打断用户（V3.1，D1 A）
 IMPL_HINTS = (
     "is_", "flag", "date_key", "字段", "取值", "编码", "代理键", "入账",
-    "y/n", "1/0", "默认", "全历史", "是否剔除", "是否包含", "格式",
+    "y/n", "1/0", "默认", "全历史", "是否剔除", "格式",
 )
 # 业务歧义：可能改变结果，需要用户确认
 BLOCKING_HINTS = (
-    "时间范围", "时间口径", "时间基准", "统计周期", "指标定义", "口径定义",
-    "统计范围", "维度定义", "定义不明", "范围", "哪个", "哪一种", "指哪",
+    "时间范围", "时间口径", "时间基准", "统计周期", "指标定义", "口径定义", "口径",
+    "统计范围", "维度定义", "定义不明", "是否包含", "范围", "哪个", "哪一个",
+    "哪一种", "指哪", "还是", "是指",
 )
 
 
@@ -142,6 +143,11 @@ def _normalize(plan: dict) -> dict:
         "missing": _as_list(plan.get("missing")),
         "reason": str(plan.get("reason") or ""),
     }
+
+
+def normalize_plan(plan: dict | None) -> dict | None:
+    """对外暴露的计划归一（供历史回读兼容旧字符串格式）。"""
+    return _normalize(plan) if isinstance(plan, dict) else None
 
 
 def parse_plan_response(text: str) -> dict:

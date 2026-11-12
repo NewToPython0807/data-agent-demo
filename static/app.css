@@ -163,6 +163,17 @@ th { background: #f3f4f6; position: sticky; top: 0; }
 .plan-card summary { cursor: pointer; font-weight: 600; color: #374151; }
 .plan-card .plan-text { margin: 6px 0 0; white-space: pre-wrap; font-family: inherit; font-size: 12px; color: #4b5563; }
 .plan-examples { margin: 0 0 6px; font-size: 12px; color: #6b7280; }
+.plan-warnings { margin: 0 0 6px; padding: 6px 8px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; font-size: 12px; color: #92400e; }
+.clarify-card { border: 1px solid #ddd6fe; background: #f5f3ff; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 13px; }
+.clarify-title { font-weight: 600; color: #5b21b6; margin-bottom: 6px; }
+.clarify-list { margin: 0 0 8px 18px; padding: 0; color: #4c1d95; }
+.clarify-list li { margin: 2px 0; }
+.clarify-assumptions { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+.clarify-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.clarify-input { flex: 1; min-width: 160px; padding: 6px 8px; font-size: 12px; border: 1px solid #d1d5db; border-radius: 6px; }
+.clarify-actions button { padding: 7px 10px; cursor: pointer; }
+.clarify-actions button.primary { background: #7c3aed; color: #fff; border: none; border-radius: 6px; }
+.clarify-hint { font-size: 12px; color: #92400e; }
 .result-warnings { margin-top: 8px; padding: 8px 10px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; font-size: 12px; color: #92400e; }
 .stats-card { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
 .stats-item { display: flex; flex-direction: column; gap: 2px; }

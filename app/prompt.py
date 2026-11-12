@@ -25,11 +25,9 @@ def build_schema_text(layer: dict | None = None) -> str:
         head = f"表 {t['table']}"
         extras = []
         if t.get("cn_name"):
-            extras.append(f"中文名：{t['cn_name']}")
+            extras.append(t["cn_name"])
         if t.get("synonyms"):
             extras.append(f"同义词：{t['synonyms']}")
-        if t.get("description"):
-            extras.append(f"说明：{t['description']}")
         if t.get("context"):
             extras.append(f"注意：{t['context']}")
         if t.get("is_deprecated"):
@@ -38,14 +36,13 @@ def build_schema_text(layer: dict | None = None) -> str:
             head += f"（{'，'.join(extras)}）"
         lines.append(head)
         for c in t.get("columns", []):
-            col = f"  - {c['column']} {c.get('type') or 'TEXT'}"
+            # 省略列类型：SQLite 类型宽松，类型对生成 SQL 非必需，可显著压缩提示词
+            col = f"  - {c['column']}"
             cextras = []
             if c.get("cn_name"):
-                cextras.append(f"中文名：{c['cn_name']}")
+                cextras.append(c["cn_name"])
             if c.get("synonyms"):
                 cextras.append(f"同义词：{c['synonyms']}")
-            if c.get("description"):
-                cextras.append(f"说明：{c['description']}")
             if c.get("context"):
                 cextras.append(f"注意：{c['context']}")
             if c.get("is_deprecated"):
@@ -62,15 +59,10 @@ def build_schema_text(layer: dict | None = None) -> str:
             mextras = []
             if m.get("synonyms"):
                 mextras.append(f"同义词：{m['synonyms']}")
-            if m.get("description"):
-                mextras.append(f"说明：{m['description']}")
             if m.get("unit"):
                 mextras.append(f"单位：{m['unit']}")
             if m.get("dimensions"):
                 mextras.append(f"维度：{m['dimensions']}")
-            if m.get("table_name"):
-                ref = m["table_name"] + (f".{m['column_name']}" if m.get("column_name") else "")
-                mextras.append(f"关联：{ref}")
             if mextras:
                 item += f"（{'，'.join(mextras)}）"
             lines.append(item)
@@ -86,8 +78,6 @@ def build_table_relations_text(layer: dict | None = None) -> str:
     lines = []
     for r in relations:
         line = f"- {r['left_table']}.{r['left_column']} = {r['right_table']}.{r['right_column']}"
-        if r.get("description"):
-            line += f"（{r['description']}）"
         lines.append(line)
     return "\n".join(lines)
 
@@ -183,27 +173,27 @@ def build_plan_prompt(question: str, context: list[dict] | None = None) -> str:
         "SELECT ...",
         "",
         "查询计划字段说明：",
-        "- can_answer：问题所需的核心数据/指标是否在库中；不存在且无法推导时为 false。",
-        "- metrics：使用的指标及口径。",
-        "- tables：涉及的表。",
-        "- joins：表间关联条件，优先使用下方“表关系（JOIN 键定义）”。",
-        "- filters：过滤条件（列、运算符、值）。",
-        "- group_by / order_by / limit：分组、排序、条数。",
-        "- assumptions：你做的假设（如时间范围口径）。",
-        "- ambiguities：需要用户澄清的歧义（如未指定时间、口径不清）。",
-        "- missing：can_answer=false 时填写缺失的数据/指标。",
+        "- can_answer：核心数据/指标是否在库中；不存在且无法推导时为 false。",
+        "- metrics/tables/joins/filters/group_by/order_by/limit：指标、表、关联、过滤、分组、排序、条数。",
+        "- assumptions：你做的假设；ambiguities：需要确认的业务歧义；missing：缺失的数据/指标。",
         "",
         "规则：",
-        "1. 只输出上面两个部分，不要输出其它解释。",
-        "2. 若 can_answer=false，【SQL】部分留空，并在 missing 写明缺什么。",
+        "1. 只输出上述两部分，不要解释。",
+        "2. can_answer=false 时【SQL】留空，missing 写明缺什么。",
         "3. 不要编造表/字段；不确定的写入 assumptions 或 ambiguities。",
         "4. 同义词/业务术语结合“同义词”字段理解；标记【已弃用】的表/字段慎用。",
         "5. SQL 只读，一条 SELECT，符合 SQLite 语法。",
-        "6. ambiguities 只列业务歧义（时间基准/指标定义/统计范围），每条给 level："
-        "blocking（会改变结果、需要用户回答）或 assumption（已给默认值、可直接继续）。",
-        "7. 字段取值（Y/N、1/0）、is_xxx_flag、date_key、是否剔除冲正、默认全历史等"
-        "实现细节一律写入 assumptions，不得写入 ambiguities。",
-        "8. 没有 blocking 歧义时，ambiguities 返回空数组。",
+        "6. ambiguities 只列业务歧义（时间/指标定义/统计范围），每条给 level："
+        "blocking（需用户回答）或 assumption（有默认值、可直接继续）。",
+        "7. 字段取值、is_xxx_flag、date_key、是否剔除冲正、默认全历史等实现细节写入 assumptions，不写入 ambiguities。",
+        "8. 无 blocking 时 ambiguities 为空数组。",
+        "9. 反例（不写入 ambiguities）：\"is_consumption_flag 的取值未明确\"、\"未指定时间范围，默认统计全部历史\"。",
+        "10. 正例（level=blocking）：\"上个月指哪个月\"、\"不良率是指逾期率还是核销率\"。",
+        "11. 消费口径：问题含消费/交易/刷卡/金额且未说取现/还款/全部交易时，"
+        "必须 JOIN dim_transaction_type 且 is_consumption_flag='Y'、is_reversal_flag='N'。",
+        "12. 聚合类问题返回聚合结果，不返回明细行。",
+        "13. 比率结果输出小数（0–1），不要乘 100。",
+        "14. 范围/指标缺失但可澄清的（如“重点地区”“帮我看看”）不要拒答，写入 ambiguities(blocking)；敏感信息直接 can_answer=false。",
         "",
         "数据库表结构与语义：",
         schema_text,
@@ -242,6 +232,8 @@ def build_correction_prompt(question: str, sql: str, error: str) -> str:
         "1. 只输出一条修正后的 SELECT 语句，不要解释。",
         "2. 只能使用下方表结构中真实存在的表名/列名。",
         "3. 不要使用写操作（INSERT/UPDATE/DELETE/DROP/ALTER）。",
+        "4. 若问题是消费/交易金额，修正时不得丢失 is_consumption_flag='Y' 与 is_reversal_flag='N'。",
+        "5. 比率类结果输出小数（0–1），不要乘 100。",
         "",
         "数据库表结构与语义：",
         schema_text,

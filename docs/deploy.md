@@ -44,7 +44,7 @@ sudo docker --version
 
 ```powershell
 cd "C:\Users\Administrator\Desktop\data agent"
-tar -czf deploy.tar.gz app static Dockerfile docker-compose.yml requirements.txt .env .dockerignore
+tar -czf deploy.tar.gz app static scripts config Dockerfile docker-compose.yml requirements.txt .env .dockerignore
 scp deploy.tar.gz ubuntu@124.220.154.238:/home/ubuntu/
 ```
 

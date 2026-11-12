@@ -23,7 +23,7 @@ from app.config import BASE_DIR
 from app.db import execute_query
 from app.sqlguard import assert_read_only
 
-GOLDEN_FILE = BASE_DIR / "golden_queries.json"
+GOLDEN_FILE = BASE_DIR / "config" / "golden_queries.json"
 
 
 def _load() -> list[dict]:

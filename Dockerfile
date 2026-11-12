@@ -16,6 +16,10 @@ RUN pip install --index-url ${PIP_INDEX_URL} -r requirements.txt
 COPY app ./app
 COPY static ./static
 
+# 造数/检核/指标修正脚本 + golden 配置（云端可重复执行）
+COPY scripts ./scripts
+COPY config ./config
+
 # 数据与日志目录（运行时挂载宿主机目录以持久化）
 RUN mkdir -p /app/data
 

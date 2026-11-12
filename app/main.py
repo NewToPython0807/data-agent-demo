@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.auth import create_session_token, get_current_user, verify_password
+from app.caliber import check_consumption
 from app.config import BASE_DIR, settings, setup_logging
 from app.correct import correct_sql
 from app.db import DatabaseError, execute_query
@@ -27,9 +28,16 @@ from app.golden import (
     match_golden,
 )
 from app.history import add_history, clear_history, get_history, init_history_table, list_history
-from app.llm import LLMError, generate_plan_text, generate_sql
+from app.intent import is_boundary, is_destructive, is_sensitive, is_vague
+from app.llm import LLMError, generate_correction, generate_plan_text, generate_sql
 from app.metric_resolver import resolve_metric_question
-from app.plan import build_refusal, parse_plan_response, should_refuse, split_ambiguities
+from app.plan import (
+    build_refusal,
+    normalize_plan,
+    parse_plan_response,
+    should_refuse,
+    split_ambiguities,
+)
 from app.metrics import (
     create_metric,
     delete_metric,
@@ -53,6 +61,7 @@ from app.semantic import (
 )
 from app.sqlguard import SQLGuardError, assert_read_only
 from app.upload import UploadError, save_and_import
+from app.units import percentage_columns
 from app.validate import check_result
 
 setup_logging(settings.log_level)
@@ -354,6 +363,8 @@ def history_detail(history_id: int, username: str = Depends(get_current_user)) -
     item = get_history(history_id)
     if item is None:
         raise HTTPException(status_code=404, detail="记录不存在")
+    if item.get("plan"):
+        item["plan"] = normalize_plan(item["plan"])
     return item
 
 
@@ -379,10 +390,54 @@ def ask(body: AskRequest, username: str = Depends(get_current_user)) -> dict:
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="问题不能为空")
 
-    # 指标直查快路径：裸指标问法（如“销售额”“销售额是多少”）按口径直接展开
+    # 敏感信息直接拒答（V3.1，FR-8）
+    if is_sensitive(body.question):
+        return {
+            "refused": True,
+            "reason": "无法回答：该问题涉及敏感信息（身份证号/手机号/密码/完整卡号），不在允许查询范围内。",
+            "missing": ["敏感信息"],
+            "plan": None,
+            "examples": [],
+            "sql": "",
+            "warnings": [],
+            "caliber_fixed": False,
+            "source": "rule",
+        }
+
+    # 写操作/破坏性意图直接拒答（V3.1，FR-8 / X06）
+    if is_destructive(body.question):
+        return {
+            "refused": True,
+            "reason": "无法回答：只支持只读查询，不能执行删除/更新/写入等写操作。",
+            "missing": ["写操作"],
+            "plan": None,
+            "examples": [],
+            "sql": "",
+            "warnings": [],
+            "caliber_fixed": False,
+            "source": "rule",
+        }
+
+    # 边界问题（无明确时间/口径）：先不走指标快路径，交由模型判断是否可答；
+    # 模型可答时再澄清，模型判超范围时仍拒答（V3.1，B01–B10 / R01/R03/R05）
+    boundary_only = (
+        is_boundary(body.question)
+        and not body.accept_assumptions
+        and not body.clarification.strip()
+    )
+
+    # 指标直查快路径：裸指标问法（如“销售额”“销售额是多少”）按口径直接展开；
+    # 若快路径 SQL 缺消费口径，则退回 LLM（V3.1，D3 A）
     fast_sql = resolve_metric_question(body.question)
-    if fast_sql:
-        return {"sql": fast_sql, "plan": None, "examples": [], "source": "metric"}
+    if fast_sql and not boundary_only and not check_consumption(fast_sql, body.question):
+        return {
+            "sql": fast_sql,
+            "plan": None,
+            "examples": [],
+            "warnings": [],
+            "caliber_fixed": False,
+            "source": "metric",
+        }
 
     question = body.question
     if body.clarification.strip():
@@ -397,6 +452,19 @@ def ask(body: AskRequest, username: str = Depends(get_current_user)) -> dict:
     parsed = parse_plan_response(raw)
     plan = parsed["plan"]
     if should_refuse(plan):
+        # 模糊问题优先澄清，不直接拒答（V3.1，FR-8）
+        if is_vague(question):
+            return {
+                "clarify": True,
+                "ambiguities": ["请明确统计范围/指标（如地区、产品、时间）"],
+                "assumptions": list(plan.get("assumptions") or []),
+                "can_accept": False,
+                "plan": plan,
+                "examples": examples,
+                "sql": "",
+                "warnings": [],
+                "source": "rule",
+            }
         return {
             "refused": True,
             "reason": build_refusal(plan),
@@ -414,13 +482,63 @@ def ask(body: AskRequest, username: str = Depends(get_current_user)) -> dict:
             "clarify": True,
             "ambiguities": blocking,
             "assumptions": list(plan.get("assumptions") or []) + plan_assumptions,
+            "can_accept": True,
             "plan": plan,
             "examples": examples,
             "sql": "",
             "source": "llm",
         }
 
-    return {"sql": parsed["sql"], "plan": plan, "examples": examples, "source": "llm"}
+    # 边界问题：模型可答也先澄清时间/口径（B01–B10）
+    if boundary_only:
+        return {
+            "clarify": True,
+            "ambiguities": ["请明确时间范围/统计范围（如具体年月、要看的指标）"],
+            "assumptions": list(plan.get("assumptions") or []),
+            "can_accept": True,
+            "plan": plan,
+            "examples": examples,
+            "sql": "",
+            "warnings": [],
+            "source": "rule",
+        }
+
+    # 消费口径后置校验 + 自动重试一次（V3.1，D3 A）
+    warnings: list[str] = []
+    caliber_fixed = False
+    if parsed["sql"]:
+        issue = check_consumption(parsed["sql"], question)
+        if issue:
+            fixed = ""
+            try:
+                fixed = generate_correction(
+                    question,
+                    parsed["sql"],
+                    issue["message"] + "。必须在 SQL 中补上：" + "、".join(issue["missing"]),
+                )
+            except LLMError:
+                fixed = ""
+            if fixed:
+                try:
+                    assert_read_only(fixed)
+                    if check_consumption(fixed, question) is None:
+                        parsed["sql"] = fixed
+                        caliber_fixed = True
+                    else:
+                        warnings.append(issue["message"] + "（自动补全未完全生效）")
+                except SQLGuardError:
+                    warnings.append("自动补全返回了非只读 SQL，已忽略")
+            else:
+                warnings.append(issue["message"] + "（自动补全失败）")
+
+    return {
+        "sql": parsed["sql"],
+        "plan": plan,
+        "examples": examples,
+        "warnings": warnings,
+        "caliber_fixed": caliber_fixed,
+        "source": "llm",
+    }
 
 
 @app.post("/api/execute")
@@ -451,6 +569,7 @@ def execute(body: ExecuteRequest, username: str = Depends(get_current_user)) -> 
         "row_count": result["row_count"],
         "history_id": history_id,
         "warnings": check_result(result),
+        "percentage_columns": percentage_columns(result["columns"], body.plan),
     }
 
 

@@ -30,7 +30,7 @@ function showError(msg) {
   document.getElementById("error").textContent = text;
 }
 
-function makeTable(columns, rows) {
+function makeTable(columns, rows, percentSet = new Set()) {
   const table = document.createElement("table");
   const thead = document.createElement("thead");
   const tr = document.createElement("tr");
@@ -45,9 +45,15 @@ function makeTable(columns, rows) {
   const tbody = document.createElement("tbody");
   for (const row of rows) {
     const tr2 = document.createElement("tr");
-    for (const cell of row) {
+    for (let i = 0; i < row.length; i += 1) {
+      const cell = row[i];
       const td = document.createElement("td");
-      td.textContent = cell === null ? "" : String(cell);
+      const col = columns[i];
+      if (percentSet.has(col) && typeof cell === "number") {
+        td.textContent = (cell * 100).toFixed(2) + "%";
+      } else {
+        td.textContent = cell === null ? "" : String(cell);
+      }
       tr2.appendChild(td);
     }
     tbody.appendChild(tr2);
@@ -67,7 +73,9 @@ function renderResult(data) {
     document.getElementById("export-btn").disabled = true;
     return;
   }
-  box.appendChild(makeTable(data.columns, data.rows || []));
+  box.appendChild(
+    makeTable(data.columns, data.rows || [], new Set(data.percentage_columns || []))
+  );
   if ((data.row_count || 0) === 0) {
     const p = document.createElement("p");
     p.className = "empty";
@@ -193,18 +201,81 @@ function renderConversation() {
       ex.textContent = "参考示例：" + t.examples.map((e) => e.question).join("；");
       a.appendChild(ex);
     }
+    const warnings = t.warnings || [];
+    if (t.caliberFixed || warnings.length) {
+      const warn = document.createElement("div");
+      warn.className = "plan-warnings";
+      const parts = [];
+      if (t.caliberFixed) parts.push("已自动补全消费口径");
+      if (warnings.length) parts.push(warnings.join("；"));
+      warn.textContent = "提示：" + parts.join("；");
+      a.appendChild(warn);
+    }
 
     if (t.status === "refused") {
       pre.textContent = t.reason || "（无法回答：该问题超出当前数据范围）";
       badge.textContent = "无法回答";
       a.append(pre, badge);
     } else if (t.status === "clarify") {
-      pre.textContent = "需要澄清：" + (t.reason || "");
-      badge.textContent = "需要澄清";
+      badge.textContent = "需要确认";
+
+      const card = document.createElement("div");
+      card.className = "clarify-card";
+
+      const title = document.createElement("div");
+      title.className = "clarify-title";
+      title.textContent = "需要你确认的业务歧义：";
+      card.appendChild(title);
+
+      const list = document.createElement("ul");
+      list.className = "clarify-list";
+      const items =
+        t.ambiguities && t.ambiguities.length ? t.ambiguities : t.reason ? [t.reason] : [];
+      for (const item of items) {
+        const li = document.createElement("li");
+        li.textContent = item;
+        list.appendChild(li);
+      }
+      card.appendChild(list);
+
+      const assumptions = t.assumptions || [];
+      if (assumptions.length) {
+        const asm = document.createElement("div");
+        asm.className = "clarify-assumptions";
+        asm.textContent = "将按以下假设继续：" + assumptions.join("；");
+        card.appendChild(asm);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "clarify-actions";
+
       const cont = document.createElement("button");
-      cont.textContent = "按假设继续";
+      cont.className = "primary";
+      cont.textContent = "按假设继续（推荐）";
       cont.addEventListener("click", () => askQuestion(true, t.question));
-      a.append(pre, badge, cont);
+
+      const input = document.createElement("input");
+      input.className = "clarify-input";
+      input.placeholder = "补充说明，如：只要活跃账户";
+
+      const sub = document.createElement("button");
+      sub.textContent = "补充说明并继续";
+      sub.addEventListener("click", () => {
+        const text = input.value.trim();
+        if (text) askQuestion(false, t.question, text);
+      });
+
+      if (t.canAccept !== false) {
+        actions.appendChild(cont);
+      } else {
+        const hint = document.createElement("span");
+        hint.className = "clarify-hint";
+        hint.textContent = "请先补充说明";
+        actions.appendChild(hint);
+      }
+      actions.append(input, sub);
+      card.appendChild(actions);
+      a.append(card, badge);
     } else if (t.status === "corrected") {
       pre.textContent = t.sql || "";
       badge.textContent = "已自动纠正";
@@ -223,7 +294,7 @@ function renderConversation() {
   scroll.scrollTop = scroll.scrollHeight;
 }
 
-async function askQuestion(acceptAssumptions = false, questionOverride = null) {
+async function askQuestion(acceptAssumptions = false, questionOverride = null, clarification = "") {
   const q = (questionOverride || document.getElementById("question").value).trim();
   showError("");
   document.getElementById("sql-area").hidden = true;
@@ -238,6 +309,7 @@ async function askQuestion(acceptAssumptions = false, questionOverride = null) {
       question: q,
       context: conversation.slice(-5).map((t) => ({ question: t.question, sql: t.sql })),
       accept_assumptions: acceptAssumptions,
+      clarification,
     }),
   });
   if (!res.ok) {
@@ -273,6 +345,9 @@ async function askQuestion(acceptAssumptions = false, questionOverride = null) {
       question: q,
       sql: "",
       status: "clarify",
+      ambiguities: data.ambiguities || [],
+      assumptions: data.assumptions || [],
+      canAccept: data.can_accept !== false,
       reason: (data.ambiguities || []).join("；"),
       plan: data.plan,
       examples: data.examples || [],
@@ -288,6 +363,8 @@ async function askQuestion(acceptAssumptions = false, questionOverride = null) {
     status: "pending",
     plan: data.plan,
     examples: data.examples || [],
+    warnings: data.warnings || [],
+    caliberFixed: !!data.caliber_fixed,
   });
   if (conversation.length > 20) conversation = conversation.slice(-20);
   renderConversation();

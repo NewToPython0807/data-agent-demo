@@ -144,22 +144,23 @@ COLUMN_CN = {
 }
 
 METRICS = [
-    ("txn_amount_total", "SUM(txn_amount_cny)", "消费交易金额：剔除冲正的消费交易本位币合计", "fct_transaction", "txn_amount_cny", "元", "日期/客户/账户/卡/商户/渠道", "消费金额,交易金额", "过滤 is_consumption_flag=Y 且 is_reversal_flag=N"),
+    ("txn_amount_total", "SUM(txn_amount_cny)", "消费交易金额：剔除冲正的消费交易本位币合计", "fct_transaction", "txn_amount_cny", "元", "日期/客户/账户/卡/商户/渠道", "消费金额,交易金额,消费额,刷卡金额", "过滤 is_consumption_flag=Y 且 is_reversal_flag=N"),
     ("txn_count", "COUNT(transaction_id)", "消费交易笔数", "fct_transaction", "transaction_id", "笔", "日期/客户/账户/卡/渠道", "交易笔数,笔数", "口径同消费交易金额"),
     ("active_card_count", "COUNT(DISTINCT card_sk)", "活跃卡量：周期内至少 1 笔消费的卡数", "fct_transaction", "card_sk", "张", "日期/卡", "活跃卡,用卡量", "去重计数，跨期不可加"),
     ("credit_utilization_rate", "SUM(outstanding_balance) / SUM(credit_limit)", "额度使用率：期末未偿/授信", "fct_account_monthly_snapshot", "outstanding_balance", "%", "日期/账户", "额度使用率,额度占用", "取周期末快照；比率 SUM/SUM"),
     ("revolving_balance_total", "SUM(revolving_balance)", "循环余额：出账后未全额还清部分", "fct_account_monthly_snapshot", "revolving_balance", "元", "日期/账户", "循环余额,循环信用", "快照取期末值，跨期不可加"),
     ("interest_income", "SUM(interest_amount)", "利息收入：账单周期计收利息", "fct_billing_cycle", "interest_amount", "元", "日期/账户", "利息收入,利息", "以账单表为准"),
+    ("cash_advance_amount", "(SELECT SUM(txn_amount_cny) FROM fct_transaction WHERE txn_type_code='CASH_ADV' AND is_reversal_flag='N')", "取现金额：交易表 CASH_ADV 合计（剔除冲正）", "", "txn_amount_cny", "元", "日期/账户/卡", "取现金额,取现", "交易表口径；跨表公式不走快路径"),
     ("repayment_rate", "(SELECT SUM(repayment_amount - overpay_portion) FROM fct_repayment) / (SELECT SUM(total_statement_amount) FROM fct_billing_cycle)", "还款率：实际收回/到期账单", "", "", "%", "日期/账户", "还款率,回收率", "跨表比率；由 LLM 按口径生成 SQL"),
     ("overdue_rate", "SUM(past_due_amount) / SUM(outstanding_balance)", "逾期率（余额口径）", "fct_account_monthly_snapshot", "past_due_amount", "%", "日期/账户", "逾期率,不良率", "取周期末快照；比率 SUM/SUM"),
-    ("write_off_rate", "SUM(write_off_amount_mtd) / AVG(outstanding_balance)", "核销率：周期核销/平均未偿", "fct_account_monthly_snapshot", "write_off_amount_mtd", "%", "日期/账户", "核销率,损失率", "分母为周期内各月末平均"),
+    ("write_off_rate", "SUM(write_off_amount_mtd) / SUM(outstanding_balance)", "核销率：周期核销/未偿余额", "fct_account_monthly_snapshot", "write_off_amount_mtd", "%", "日期/账户", "核销率,损失率", "SUM/SUM，周期口径"),
     ("points_issued", "SUM(points_earned)", "积分发放量", "fct_transaction", "points_earned", "分", "日期/客户/卡", "积分发放,发分", "交易级口径"),
     ("points_redeemed", "SUM(points_redeemed)", "积分兑换量", "fct_transaction", "points_redeemed", "分", "日期/客户/卡", "积分兑换,用分", "交易级口径"),
     ("points_liability_balance", "SUM(points_balance)", "积分负债余额", "fct_account_monthly_snapshot", "points_balance", "分", "日期/账户", "积分负债,积分余额", "快照取期末值"),
     ("new_customer_count", "COUNT(*)", "新增客户数：周期内新建档客户", "dim_customer", "customer_sk", "户", "日期", "新增客户,获客", "按 entry_date 过滤"),
     ("new_card_count", "COUNT(*)", "新增发卡量：周期内新发卡", "dim_card", "card_sk", "张", "日期", "新增发卡,发卡量", "按 issued_date 过滤"),
     ("activation_rate", "SUM(CASE WHEN activated_date IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*)", "激活率：已激活/已发卡", "dim_card", "activated_date", "%", "日期", "激活率,开卡率", "按发卡周期"),
-    ("avg_credit_limit", "AVG(credit_limit)", "平均授信额度", "fct_account_monthly_snapshot", "credit_limit", "元", "日期/账户", "平均额度,授信额度", "取周期末快照"),
+    ("avg_credit_limit", "(SELECT AVG(credit_limit) FROM fct_account_monthly_snapshot WHERE month_end_date_key = (SELECT MAX(month_end_date_key) FROM fct_account_monthly_snapshot))", "平均授信额度（按账户、最新月末快照）", "", "credit_limit", "元", "日期/账户", "平均授信额度,户均授信,平均额度", "按账户、最新月末快照"),
 ]
 
 RELATIONS = [

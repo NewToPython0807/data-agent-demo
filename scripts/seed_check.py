@@ -1,7 +1,7 @@
 """信用卡造数数据检核（详细输出 + 汇总）。
 
-在 seed_credit_card.py 之后运行：
-    .venv\\Scripts\\python test_seed_check.py
+在 scripts.seed_credit_card 之后运行：
+    .venv\\Scripts\\python -m scripts.seed_check
 """
 from __future__ import annotations
 
@@ -201,12 +201,33 @@ def main() -> int:
                      "('txn_amount_total','txn_count','active_card_count','credit_utilization_rate',"
                      "'revolving_balance_total','interest_income','repayment_rate','overdue_rate',"
                      "'write_off_rate','points_issued','points_redeemed','points_liability_balance',"
-                     "'new_customer_count','new_card_count','activation_rate','avg_credit_limit')")
-        check("语义层指标数", n == 16, f"{n} / 16")
+                     "'new_customer_count','new_card_count','activation_rate','avg_credit_limit',"
+                     "'cash_advance_amount')")
+        check("语义层指标数", n == 17, f"{n} / 17")
         n = q1(conn, f"SELECT COUNT(*) FROM table_relations WHERE left_table IN {table_names}")
         check("表关系数", n >= 26, f"{n} / ≥26")
         n = q1(conn, f"SELECT COUNT(*) FROM column_meta WHERE table_name IN {table_names}")
         check("字段中文名数", n >= 150, f"{n} / ≥150")
+
+        # 16) 指标合理性（V3.1，T21/T22）
+        wo = q1(conn, "SELECT SUM(write_off_amount_mtd)*1.0/SUM(outstanding_balance) FROM fct_account_monthly_snapshot")
+        check("内核销率 0-1", wo is not None and 0 <= wo <= 1, f"{wo}")
+        rr = q1(conn, "SELECT (SELECT SUM(repayment_amount-overpay_portion) FROM fct_repayment)*1.0/"
+                      "(SELECT SUM(total_statement_amount) FROM fct_billing_cycle)")
+        check("还款率 0-1", rr is not None and 0 <= rr <= 1, f"{rr}")
+        ca = q1(conn, "SELECT SUM(txn_amount_cny) FROM fct_transaction "
+                      "WHERE txn_type_code='CASH_ADV' AND is_reversal_flag='N'")
+        check("取现金额 >0", ca is not None and ca > 0, f"{ca}")
+        avg = q1(conn, "SELECT AVG(credit_limit) FROM fct_account_monthly_snapshot "
+                       "WHERE month_end_date_key = (SELECT MAX(month_end_date_key) FROM fct_account_monthly_snapshot)")
+        check("户均授信 >0", avg is not None and avg > 0, f"{avg}")
+        n = q1(conn, """
+            SELECT COUNT(*) FROM fct_billing_cycle b
+            WHERE ABS(b.closing_cycle_balance - (b.total_statement_amount - COALESCE((
+                SELECT SUM(r.repayment_amount - r.overpay_portion) FROM fct_repayment r
+                WHERE r.billing_cycle_id = b.billing_cycle_id), 0))) > 0.01
+        """)
+        check("账单结欠 = 应还-已还", n == 0, f"不符 {n}")
 
     failed = [name for name, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} passed")
